@@ -450,8 +450,9 @@ tr:last-child td{border-bottom:none;}
   res.end('Not found')
 })
 
-server.listen(3001, '0.0.0.0', () => {
-  console.log('Screenshot service running on :3001')
+const PORT = process.env.PORT || 3001
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Screenshot service running on :${PORT}`)
 
   // Self keep-alive: ping diri sendiri setiap 30 detik
   // Mencegah sandbox Novita sleep — lebih andal dari CF cron karena dari dalam sandbox
