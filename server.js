@@ -20,7 +20,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v4-install-headless-shell-20260616'
+const DEPLOY_VERSION = 'v5-only-shell-20260616'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
@@ -32,18 +32,23 @@ function getChromiumStatus() {
       return { installed: false, reason: `browsersPath not found: ${browsersPath}` }
     }
     const dirs = fs.readdirSync(browsersPath)
-    const chromiumDir = dirs.find(d => d.startsWith('chromium'))
+    // Cek chromium_headless_shell-* DULU (yang dipakai Render Linux headless)
+    // lalu fallback ke chromium-* (untuk non-headless / local dev)
+    const shellDir = dirs.find(d => d.startsWith('chromium_headless_shell'))
+    const chromiumDir = shellDir || dirs.find(d => d.startsWith('chromium'))
     if (!chromiumDir) {
       return { installed: false, reason: `no chromium* folder in ${browsersPath}. dirs: ${dirs.join(',')}` }
     }
-    // Cek ada INSTALLATION_COMPLETE marker (playwright set ini saat install berhasil)
+    // Cek ada INSTALLATION_COMPLETE marker
     const completePath = path.join(browsersPath, chromiumDir, 'INSTALLATION_COMPLETE')
     const complete = fs.existsSync(completePath)
     return {
       installed: complete,
       dir: chromiumDir,
+      shellDir: shellDir || null,
       completePath,
       complete,
+      allDirs: dirs,
       reason: complete ? 'OK' : `INSTALLATION_COMPLETE not found in ${chromiumDir}`
     }
   } catch(e) {
@@ -585,8 +590,8 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`[chromium] Already installed ✓ (${chromiumStatus.dir})`)
   } else {
     console.log(`[chromium] Not found (${chromiumStatus.reason}), installing in background...`)
-    // Install chromium + chromium-headless-shell (Render pakai headless-shell di production)
-    const installProc = spawn('npx', ['playwright', 'install', 'chromium', 'chromium-headless-shell'], {
+    // Render Linux headless pakai chromium_headless_shell — install dengan --only-shell
+    const installProc = spawn('npx', ['playwright', 'install', '--only-shell', 'chromium'], {
       detached: true,
       stdio: 'inherit',
       env: { ...process.env }
