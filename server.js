@@ -20,7 +20,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v3-folder-check-20260616'
+const DEPLOY_VERSION = 'v4-install-headless-shell-20260616'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
@@ -70,6 +70,34 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/version') {
     res.writeHead(200, {'Content-Type':'application/json'})
     res.end(JSON.stringify({ version: DEPLOY_VERSION, chromium: getChromiumStatus() }))
+    return
+  }
+
+  // Debug endpoint: introspect dari dalam proses Render
+  if (req.method === 'GET' && url.pathname === '/api/debug') {
+    const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH ||
+      path.join(require('os').homedir(), '.cache', 'ms-playwright')
+    let dirContents = []
+    let chromiumDirContents = []
+    let execPath = ''
+    try { execPath = chromium.executablePath() } catch(e) { execPath = e.message }
+    try { dirContents = fs.readdirSync(browsersPath) } catch(e) { dirContents = [e.message] }
+    // List isi folder chromium* jika ada
+    const chromiumDir = dirContents.find && dirContents.find(d => typeof d === 'string' && d.startsWith('chromium'))
+    if (chromiumDir) {
+      try { chromiumDirContents = fs.readdirSync(path.join(browsersPath, chromiumDir)) } catch(e) { chromiumDirContents = [e.message] }
+    }
+    res.writeHead(200, {'Content-Type':'application/json'})
+    res.end(JSON.stringify({
+      version: DEPLOY_VERSION,
+      executablePath: execPath,
+      browsersPath,
+      NODE_ENV: process.env.NODE_ENV,
+      PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH,
+      dirContents,
+      chromiumDir,
+      chromiumDirContents
+    }))
     return
   }
 
@@ -557,7 +585,8 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`[chromium] Already installed ✓ (${chromiumStatus.dir})`)
   } else {
     console.log(`[chromium] Not found (${chromiumStatus.reason}), installing in background...`)
-    const installProc = spawn('npx', ['playwright', 'install', 'chromium'], {
+    // Install chromium + chromium-headless-shell (Render pakai headless-shell di production)
+    const installProc = spawn('npx', ['playwright', 'install', 'chromium', 'chromium-headless-shell'], {
       detached: true,
       stdio: 'inherit',
       env: { ...process.env }
