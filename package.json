@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "npx playwright install chromium && node server.js",
-    "build": "echo 'build done'"
+    "start": "node server.js",
+    "build": "echo 'build done - chromium installs at runtime'"
   },
   "keywords": [],
   "author": "",

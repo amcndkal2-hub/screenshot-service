@@ -525,6 +525,25 @@ const PORT = process.env.PORT || 3001
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Screenshot service running on :${PORT}`)
 
+  // Install chromium di background setelah server start
+  // Agar Render tidak timeout karena port belum buka
+  const { execSync, spawn } = require('child_process')
+  try {
+    // Cek apakah chromium sudah terinstall
+    execSync('npx playwright install --dry-run chromium 2>&1', { stdio: 'ignore' })
+    console.log('[chromium] Already installed, skipping download')
+  } catch(e) {
+    console.log('[chromium] Installing in background...')
+    const installProc = spawn('npx', ['playwright', 'install', 'chromium'], {
+      detached: true,
+      stdio: 'inherit',
+      env: process.env
+    })
+    installProc.on('exit', (code) => {
+      console.log(`[chromium] Install finished, exit code: ${code}`)
+    })
+  }
+
   // Self keep-alive: ping diri sendiri setiap 30 detik
   // Gunakan PORT variable (bukan hardcode) agar work di Render (PORT = 10000+)
   setInterval(async () => {
