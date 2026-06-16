@@ -7,7 +7,14 @@ let browser = null
 
 async function getBrowser() {
   if (!browser) {
-    browser = await chromium.launch({ args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage'] })
+    const launchOptions = {
+      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']
+    }
+    // Di Render/Docker: pakai Chromium sistem
+    if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
+      launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+    }
+    browser = await chromium.launch(launchOptions)
   }
   return browser
 }
