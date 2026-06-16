@@ -3,7 +3,7 @@ services:
     name: screenshot-service
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install && npx playwright install --only-shell chromium
     startCommand: node server.js
     envVars:
       - key: NODE_ENV

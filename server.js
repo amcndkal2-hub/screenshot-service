@@ -20,7 +20,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v5-only-shell-20260616'
+const DEPLOY_VERSION = 'v6-build-install-20260616'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
@@ -578,35 +578,15 @@ const PORT = process.env.PORT || 3001
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Screenshot service running on :${PORT}`)
 
-  // ── Install chromium di background setelah server start ──
-  // Gunakan fs.existsSync(chromium.executablePath()) — lebih reliable dari --dry-run
-  const { spawn } = require('child_process')
-
-  // Pakai folder-based check — robust untuk semua varian nama folder chromium
+  // Chromium diinstall saat build (render.yaml buildCommand)
+  // Cek status saat startup untuk logging saja
   const chromiumStatus = getChromiumStatus()
   console.log(`[chromium] status: ${JSON.stringify(chromiumStatus)}`)
-
   if (chromiumStatus.installed) {
-    console.log(`[chromium] Already installed ✓ (${chromiumStatus.dir})`)
+    console.log(`[chromium] Ready ✓ (${chromiumStatus.dir})`)
   } else {
-    console.log(`[chromium] Not found (${chromiumStatus.reason}), installing in background...`)
-    // Render Linux headless pakai chromium_headless_shell — install dengan --only-shell
-    const installProc = spawn('npx', ['playwright', 'install', '--only-shell', 'chromium'], {
-      detached: true,
-      stdio: 'inherit',
-      env: { ...process.env }
-    })
-    installProc.unref()
-    installProc.on('exit', (code) => {
-      if (code === 0) {
-        console.log('[chromium] Install DONE ✓ — ready for screenshots')
-      } else {
-        console.error(`[chromium] Install FAILED (exit code ${code})`)
-      }
-    })
-    installProc.on('error', (err) => {
-      console.error(`[chromium] Install spawn error: ${err.message}`)
-    })
+    console.error(`[chromium] WARNING: not ready — ${chromiumStatus.reason}`)
+    console.error(`[chromium] Pastikan buildCommand di Render: npm install && npx playwright install --only-shell chromium`)
   }
 
   // Self keep-alive setiap 14 menit (Render free spin-down = 15 menit idle)
