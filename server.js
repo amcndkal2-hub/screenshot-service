@@ -441,49 +441,71 @@ tr:last-child td{border-bottom:none;}
         const shot = await el.screenshot({ type:'png' })
         await ctx.close()
 
-        // Upload ke imgbb → dapat public URL
         const b64 = shot.toString('base64')
-        let imgUrl = ''
-        try {
-          const upForm = new URLSearchParams()
-          upForm.append('key',   'bb2f97ad9b31b5ae4967eeead61e03de')
-          upForm.append('image', b64)
-          upForm.append('name',  `NERACA_${tgl}_${Date.now()}`)
-          const imgRes  = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body: upForm })
-          const imgJson = await imgRes.json()
-          if (imgJson.success && imgJson.data?.url) {
-            imgUrl = imgJson.data.url
-            console.log(`[IMGBB-NERACA] Upload OK → ${imgUrl}`)
-          } else {
-            console.error(`[IMGBB-NERACA] FAIL: ${JSON.stringify(imgJson)}`)
-          }
-        } catch(e) { console.error(`[IMGBB-NERACA] Error: ${e.message}`) }
+        const { nomor, group, message: waMsg, callbackUrl } = JSON.parse(body || '{}')
 
-        // Kirim WA jika ada nomor atau group
-        const { nomor, group, message: waMsg } = JSON.parse(body || '{}')
-        let waResult = null
-        if ((nomor || group) && imgUrl) {
-          try {
-            const caption = waMsg || `⚡ *NERACA DAYA KALSELTENG — ${tglFmt}*\nData beban puncak malam seluruh ULD\n_AMC UID KASELTENG_`
-            const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
-            let waEndpoint = ''
-            if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
-            else       { payload.group  = group;  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
-            const waRes = await fetch(waEndpoint, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            })
-            waResult = await waRes.json()
-            console.log(`[WA-NERACA] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
-          } catch(e) {
-            console.error(`[WA-NERACA] Error: ${e.message}`)
-            waResult = { error: e.message }
-          }
-        }
-
+        // FIRE-AND-FORGET: langsung response ke CF Worker agar tidak timeout
         res.writeHead(200, {'Content-Type':'application/json'})
-        res.end(JSON.stringify({ success: !!imgUrl, url: imgUrl, wa: waResult, error: imgUrl ? undefined : 'imgbb upload gagal' }))
+        res.end(JSON.stringify({ success: true, queued: true }))
+
+        // Proses imgbb + WA + callback di background (setelah response dikirim)
+        if (nomor || group) {
+          ;(async () => {
+            let waResult = null
+            let imgUrl = ''
+            try {
+              // Upload ke imgbb
+              try {
+                const upForm = new URLSearchParams()
+                upForm.append('key',   'bb2f97ad9b31b5ae4967eeead61e03de')
+                upForm.append('image', b64)
+                upForm.append('name',  `NERACA_${tgl}_${Date.now()}`)
+                const imgRes  = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body: upForm })
+                const imgJson = await imgRes.json()
+                if (imgJson.success && imgJson.data?.url) {
+                  imgUrl = imgJson.data.url
+                  console.log(`[IMGBB-NERACA] Upload OK → ${imgUrl}`)
+                } else {
+                  console.error(`[IMGBB-NERACA] FAIL: ${JSON.stringify(imgJson)}`)
+                }
+              } catch(e) { console.error(`[IMGBB-NERACA] Error: ${e.message}`) }
+
+              // Kirim WA via JSON {file: imgbbUrl}
+              if (imgUrl) {
+                const caption = waMsg || `⚡ *NERACA DAYA KALSELTENG — ${tglFmt}*\nData beban puncak malam seluruh ULD\n_AMC UID KASELTENG_`
+                const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
+                let waEndpoint = ''
+                if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
+                else       { payload.group  = group;  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
+                const waRes = await fetch(waEndpoint, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload)
+                })
+                waResult = await waRes.json()
+                console.log(`[WA-NERACA] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
+              } else {
+                console.error(`[WA-NERACA] Skip — imgUrl kosong`)
+                waResult = { error: 'imgUrl kosong' }
+              }
+            } catch(e) {
+              console.error(`[WA-NERACA] Error kirim: ${e.message}`)
+              waResult = { error: e.message }
+            }
+
+            // Callback ke CF Worker untuk update KV neraca-last-sent-date
+            if (waResult?.status && callbackUrl) {
+              try {
+                await fetch(callbackUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ tanggal: tgl, status: 'sent' })
+                })
+                console.log(`[CB-NERACA] Callback OK → ${callbackUrl}`)
+              } catch(e) { console.error(`[CB-NERACA] Callback error: ${e.message}`) }
+            }
+          })()
+        }
 
       } catch(e) {
         if (!res.headersSent) {
