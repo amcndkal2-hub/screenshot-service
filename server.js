@@ -20,28 +20,56 @@ async function getBrowser() {
   return browser
 }
 
-// Cek apakah chromium sudah terinstall dengan melihat executable path
-function isChromiumInstalled() {
+const DEPLOY_VERSION = 'v3-folder-check-20260616'
+
+// Cek chromium via folder existence — robust untuk semua nama folder:
+// chromium-1217, chromium_headless_shell-1217, dll.
+function getChromiumStatus() {
+  const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH ||
+    path.join(require('os').homedir(), '.cache', 'ms-playwright')
   try {
-    const execPath = chromium.executablePath()
-    const exists = fs.existsSync(execPath)
-    console.log(`[chromium] executablePath: ${execPath}`)
-    console.log(`[chromium] exists: ${exists}`)
-    return exists
+    if (!fs.existsSync(browsersPath)) {
+      return { installed: false, reason: `browsersPath not found: ${browsersPath}` }
+    }
+    const dirs = fs.readdirSync(browsersPath)
+    const chromiumDir = dirs.find(d => d.startsWith('chromium'))
+    if (!chromiumDir) {
+      return { installed: false, reason: `no chromium* folder in ${browsersPath}. dirs: ${dirs.join(',')}` }
+    }
+    // Cek ada INSTALLATION_COMPLETE marker (playwright set ini saat install berhasil)
+    const completePath = path.join(browsersPath, chromiumDir, 'INSTALLATION_COMPLETE')
+    const complete = fs.existsSync(completePath)
+    return {
+      installed: complete,
+      dir: chromiumDir,
+      completePath,
+      complete,
+      reason: complete ? 'OK' : `INSTALLATION_COMPLETE not found in ${chromiumDir}`
+    }
   } catch(e) {
-    console.log(`[chromium] executablePath error: ${e.message}`)
-    return false
+    return { installed: false, reason: e.message }
   }
+}
+
+function isChromiumInstalled() {
+  const status = getChromiumStatus()
+  console.log(`[chromium] status:`, JSON.stringify(status))
+  return status.installed
 }
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost:3001')
 
   if (req.method === 'GET' && url.pathname === '/health') {
-    // Cek status chromium di health response
-    const chromiumReady = isChromiumInstalled()
+    const status = getChromiumStatus()
     res.writeHead(200, {'Content-Type':'application/json'})
-    res.end(JSON.stringify({ ok: true, chromiumReady }))
+    res.end(JSON.stringify({ ok: true, chromiumReady: status.installed, chromiumStatus: status, version: DEPLOY_VERSION }))
+    return
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/version') {
+    res.writeHead(200, {'Content-Type':'application/json'})
+    res.end(JSON.stringify({ version: DEPLOY_VERSION, chromium: getChromiumStatus() }))
     return
   }
 
@@ -521,13 +549,14 @@ server.listen(PORT, '0.0.0.0', () => {
   // Gunakan fs.existsSync(chromium.executablePath()) — lebih reliable dari --dry-run
   const { spawn } = require('child_process')
 
-  const execPath = chromium.executablePath()
-  console.log(`[chromium] Expected path: ${execPath}`)
+  // Pakai folder-based check — robust untuk semua varian nama folder chromium
+  const chromiumStatus = getChromiumStatus()
+  console.log(`[chromium] status: ${JSON.stringify(chromiumStatus)}`)
 
-  if (fs.existsSync(execPath)) {
-    console.log('[chromium] Already installed ✓')
+  if (chromiumStatus.installed) {
+    console.log(`[chromium] Already installed ✓ (${chromiumStatus.dir})`)
   } else {
-    console.log('[chromium] Not found, installing in background...')
+    console.log(`[chromium] Not found (${chromiumStatus.reason}), installing in background...`)
     const installProc = spawn('npx', ['playwright', 'install', 'chromium'], {
       detached: true,
       stdio: 'inherit',
