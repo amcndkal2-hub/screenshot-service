@@ -1,5 +1,7 @@
 const http = require('http')
 const { chromium } = require('playwright')
+const path = require('path')
+const fs = require('fs')
 
 const WHACENTER_DEVICE_ID = '550fd04ee9fc7c4b4e057d0bce6270f3'
 
@@ -10,7 +12,6 @@ async function getBrowser() {
     const launchOptions = {
       args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']
     }
-    // Di Render/Docker: pakai Chromium sistem
     if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
       launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
     }
@@ -19,12 +20,28 @@ async function getBrowser() {
   return browser
 }
 
+// Cek apakah chromium sudah terinstall dengan melihat executable path
+function isChromiumInstalled() {
+  try {
+    const execPath = chromium.executablePath()
+    const exists = fs.existsSync(execPath)
+    console.log(`[chromium] executablePath: ${execPath}`)
+    console.log(`[chromium] exists: ${exists}`)
+    return exists
+  } catch(e) {
+    console.log(`[chromium] executablePath error: ${e.message}`)
+    return false
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost:3001')
 
   if (req.method === 'GET' && url.pathname === '/health') {
+    // Cek status chromium di health response
+    const chromiumReady = isChromiumInstalled()
     res.writeHead(200, {'Content-Type':'application/json'})
-    res.end(JSON.stringify({ ok: true }))
+    res.end(JSON.stringify({ ok: true, chromiumReady }))
     return
   }
 
@@ -84,7 +101,6 @@ const server = http.createServer(async (req, res) => {
           const rowBg    = i % 2 === 0 ? '#ffffff' : '#f8fafc'
           const showHop  = d.safety_stock != null && d.safety_stock < 8
 
-          // p = padding kecil, teks kecil — supaya 20 kolom muat di ~1600px
           const p = 'padding:4px 6px;'
           rows_html += `<tr style="background:${rowBg};">
             <td style="${p}text-align:center;">${i+1}</td>
@@ -161,7 +177,6 @@ tr:last-child td{border-bottom:none;}
   </table>
 </div></body></html>`
 
-        // deviceScaleFactor: 2 → render 2x lebih detail, output tetap ukuran wajar tapi sharp
         const br = await getBrowser()
         const ctx = await br.newContext({
           viewport: { width: 100, height: 100 },
@@ -171,7 +186,6 @@ tr:last-child td{border-bottom:none;}
         await page.setContent(html, { waitUntil: 'networkidle' })
         await page.waitForTimeout(200)
 
-        // Ukur konten nyata, set viewport tepat
         const el  = await page.$('.wrap')
         const box = await el.boundingBox()
         await page.setViewportSize({
@@ -184,13 +198,10 @@ tr:last-child td{border-bottom:none;}
 
         const { nomor, group, message: waMsg, callbackUrl } = JSON.parse(body || '{}')
 
-        // Langsung response ke CF Worker — jangan buat CF timeout
-        // CF Worker sudah fire-and-forget, screenshot service kirim WA + callback sendiri
         const b64 = shot.toString('base64')
         res.writeHead(200, {'Content-Type':'application/json'})
         res.end(JSON.stringify({ success: true, queued: true }))
 
-        // Kirim WA + callback di background (setelah response dikirim)
         if (nomor || group) {
           ;(async () => {
             let waResult = null
@@ -199,8 +210,6 @@ tr:last-child td{border-bottom:none;}
               const tglFmt = tgl.split('-').reverse().join('.')
               const caption = waMsg || `📊 *HOP BBM KALSELTENG — ${tglFmt}*\nData stok & estimasi BBM per ULD (data H-1)\n_AMC UID KASELTENG_`
 
-              // STEP 1: Upload ke imgbb → dapat public URL
-              // Nama unik dengan timestamp agar imgbb selalu beri URL baru (hindari dedup)
               try {
                 const upForm = new URLSearchParams()
                 upForm.append('key', 'bb2f97ad9b31b5ae4967eeead61e03de')
@@ -221,7 +230,6 @@ tr:last-child td{border-bottom:none;}
                 console.error(`[IMGBB] Error: ${e.message}`)
               }
 
-              // STEP 2: Kirim ke Whacenter via JSON body {file: imgbbUrl}
               if (imgUrl) {
                 const payload = {
                   device_id: WHACENTER_DEVICE_ID,
@@ -252,7 +260,6 @@ tr:last-child td{border-bottom:none;}
               waResult = { error: e.message }
             }
 
-            // Callback ke CF Worker untuk update KV hop-last-sent-date
             if (waResult?.status && callbackUrl) {
               try {
                 await fetch(callbackUrl, {
@@ -267,7 +274,6 @@ tr:last-child td{border-bottom:none;}
         }
 
       } catch(e) {
-        // Hanya kirim response kalau belum dikirim
         if (!res.headersSent) {
           res.writeHead(200, {'Content-Type':'application/json'})
           res.end(JSON.stringify({ success: false, error: e.message }))
@@ -290,7 +296,6 @@ tr:last-child td{border-bottom:none;}
         const tgl = tanggal || new Date().toISOString().split('T')[0]
         const tglFmt = tgl.split('-').reverse().join('.')
 
-        // Ambil data neraca daya
         const apiRes = await fetch(`${baseUrl}/api/neraca-daya?tanggal=${tgl}`)
         const apiJson = await apiRes.json()
         if (!apiJson.success || !apiJson.data?.length) {
@@ -309,7 +314,6 @@ tr:last-child td{border-bottom:none;}
           return Number(val).toLocaleString('id-ID')
         }
 
-        // Hitung total
         let totMaks=0, totBpSiang=0, totCadSiang=0, totBpMalam=0, totCadMalam=0
         let totOps=0, totStby=0, totPem=0, totGng=0, totRsk=0
         rows.forEach(d => {
@@ -330,15 +334,10 @@ tr:last-child td{border-bottom:none;}
           const rowBg = i % 2 === 0 ? '#ffffff' : '#f8fafc'
           const p = 'padding:5px 7px;'
 
-          // Formula STATUS sama persis dengan dashboard:
-          // cadMalam = dm_pasok - beban_puncak_malam
-          // cadMalam < 0          → KRITIS  (defisit)
-          // 0 <= cadMalam < max_dm → SIAGA
-          // cadMalam >= max_dm     → NORMAL
           const cadSiang = (d.dm_pasok||0) - (d.beban_puncak_siang||0)
           const cadMalam = (d.dm_pasok||0) - (d.beban_puncak_malam||0)
           const maxDm    = d.max_dm||0
-          const n1       = cadMalam - maxDm  // N-1 = cadMalam - maxDM
+          const n1       = cadMalam - maxDm
 
           let statusLabel, statusBg, statusFg
           if (cadMalam < 0) {
@@ -367,7 +366,6 @@ tr:last-child td{border-bottom:none;}
           </tr>`
         })
 
-        // Row total
         const totN1 = totCadMalam - (rows.reduce((s,d)=>s+(d.max_dm||0),0))
         rows_html += `<tr style="background:#1e3a5f;color:#fff;font-weight:700;">
           <td colspan="2" style="padding:5px 7px;text-align:center;">TOTAL</td>
@@ -429,7 +427,6 @@ tr:last-child td{border-bottom:none;}
   </table>
 </div></body></html>`
 
-        // Screenshot via Playwright
         const br = await getBrowser()
         const ctx = await br.newContext({ viewport:{ width:100, height:100 }, deviceScaleFactor:2 })
         const page = await ctx.newPage()
@@ -444,17 +441,14 @@ tr:last-child td{border-bottom:none;}
         const b64 = shot.toString('base64')
         const { nomor, group, message: waMsg, callbackUrl } = JSON.parse(body || '{}')
 
-        // FIRE-AND-FORGET: langsung response ke CF Worker agar tidak timeout
         res.writeHead(200, {'Content-Type':'application/json'})
         res.end(JSON.stringify({ success: true, queued: true }))
 
-        // Proses imgbb + WA + callback di background (setelah response dikirim)
         if (nomor || group) {
           ;(async () => {
             let waResult = null
             let imgUrl = ''
             try {
-              // Upload ke imgbb
               try {
                 const upForm = new URLSearchParams()
                 upForm.append('key',   'bb2f97ad9b31b5ae4967eeead61e03de')
@@ -470,7 +464,6 @@ tr:last-child td{border-bottom:none;}
                 }
               } catch(e) { console.error(`[IMGBB-NERACA] Error: ${e.message}`) }
 
-              // Kirim WA via JSON {file: imgbbUrl}
               if (imgUrl) {
                 const caption = waMsg || `⚡ *NERACA DAYA KALSELTENG — ${tglFmt}*\nData beban puncak malam seluruh ULD\n_AMC UID KASELTENG_`
                 const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
@@ -493,7 +486,6 @@ tr:last-child td{border-bottom:none;}
               waResult = { error: e.message }
             }
 
-            // Callback ke CF Worker untuk update KV neraca-last-sent-date
             if (waResult?.status && callbackUrl) {
               try {
                 await fetch(callbackUrl, {
@@ -525,30 +517,39 @@ const PORT = process.env.PORT || 3001
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Screenshot service running on :${PORT}`)
 
-  // Install chromium di background setelah server start
-  // Agar Render tidak timeout karena port belum buka
-  const { execSync, spawn } = require('child_process')
-  try {
-    // Cek apakah chromium sudah terinstall
-    execSync('npx playwright install --dry-run chromium 2>&1', { stdio: 'ignore' })
-    console.log('[chromium] Already installed, skipping download')
-  } catch(e) {
-    console.log('[chromium] Installing in background...')
+  // ── Install chromium di background setelah server start ──
+  // Gunakan fs.existsSync(chromium.executablePath()) — lebih reliable dari --dry-run
+  const { spawn } = require('child_process')
+
+  const execPath = chromium.executablePath()
+  console.log(`[chromium] Expected path: ${execPath}`)
+
+  if (fs.existsSync(execPath)) {
+    console.log('[chromium] Already installed ✓')
+  } else {
+    console.log('[chromium] Not found, installing in background...')
     const installProc = spawn('npx', ['playwright', 'install', 'chromium'], {
       detached: true,
       stdio: 'inherit',
-      env: process.env
+      env: { ...process.env }
     })
+    installProc.unref()
     installProc.on('exit', (code) => {
-      console.log(`[chromium] Install finished, exit code: ${code}`)
+      if (code === 0) {
+        console.log('[chromium] Install DONE ✓ — ready for screenshots')
+      } else {
+        console.error(`[chromium] Install FAILED (exit code ${code})`)
+      }
+    })
+    installProc.on('error', (err) => {
+      console.error(`[chromium] Install spawn error: ${err.message}`)
     })
   }
 
-  // Self keep-alive: ping diri sendiri setiap 30 detik
-  // Gunakan PORT variable (bukan hardcode) agar work di Render (PORT = 10000+)
+  // Self keep-alive setiap 14 menit (Render free spin-down = 15 menit idle)
   setInterval(async () => {
     try {
       await fetch(`http://localhost:${PORT}/health`, { signal: AbortSignal.timeout(5000) })
     } catch(e) { /* ignore */ }
-  }, 30 * 1000)
+  }, 14 * 60 * 1000)
 })
