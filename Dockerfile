@@ -1,9 +1,10 @@
 FROM node:20-slim
 
-# Install dependencies yang dibutuhkan Chromium
+# Install Chromium dan semua dependensi
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
+    fonts-noto \
     libappindicator3-1 \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -17,21 +18,31 @@ RUN apt-get update && apt-get install -y \
     libxcomposite1 \
     libxdamage1 \
     libxrandr2 \
+    libxss1 \
+    libxtst6 \
     xdg-utils \
+    ca-certificates \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
+
+# Verifikasi chromium berhasil terinstall dan catat path-nya
+RUN echo "=== Chromium path ===" && \
+    (which chromium && which chromium | xargs ls -la) || \
+    (which chromium-browser && which chromium-browser | xargs ls -la) || \
+    (echo "ERROR: chromium not found" && exit 1)
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm install
 
-# Paksa Playwright pakai Chromium sistem, bukan download sendiri
+# Playwright: skip download, pakai chromium sistem
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 COPY server.js ./
+COPY start.sh ./
+RUN chmod +x start.sh
 
 EXPOSE 3001
 
-CMD ["node", "server.js"]
+CMD ["./start.sh"]

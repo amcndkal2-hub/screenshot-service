@@ -504,10 +504,10 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`Screenshot service running on :${PORT}`)
 
   // Self keep-alive: ping diri sendiri setiap 30 detik
-  // Mencegah sandbox Novita sleep — lebih andal dari CF cron karena dari dalam sandbox
+  // Gunakan PORT variable (bukan hardcode) agar work di Render (PORT = 10000+)
   setInterval(async () => {
     try {
-      await fetch('http://localhost:3001/health', { signal: AbortSignal.timeout(5000) })
+      await fetch(`http://localhost:${PORT}/health`, { signal: AbortSignal.timeout(5000) })
     } catch(e) { /* ignore */ }
   }, 30 * 1000)
 })
