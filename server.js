@@ -303,13 +303,14 @@ tr:last-child td{border-bottom:none;}
         }
 
         // Hitung total
-        let totDmTerpasang=0, totDmPasok=0, totBpSiang=0, totBpMalam=0
+        let totMaks=0, totBpSiang=0, totCadSiang=0, totBpMalam=0, totCadMalam=0
         let totOps=0, totStby=0, totPem=0, totGng=0, totRsk=0
         rows.forEach(d => {
-          totDmTerpasang += d.dm_terpasang||0
-          totDmPasok     += d.dm_pasok||0
-          totBpSiang     += d.beban_puncak_siang||0
-          totBpMalam     += d.beban_puncak_malam||0
+          totMaks      += d.dm_terpasang||0
+          totBpSiang   += d.beban_puncak_siang||0
+          totCadSiang  += Math.max(0, (d.dm_pasok||0) - (d.beban_puncak_siang||0))
+          totBpMalam   += d.beban_puncak_malam||0
+          totCadMalam  += Math.max(0, (d.dm_pasok||0) - (d.beban_puncak_malam||0))
           totOps  += d.jumlah_operasi||0
           totStby += d.jumlah_standby||0
           totPem  += d.jumlah_pemeliharaan||0
@@ -322,36 +323,53 @@ tr:last-child td{border-bottom:none;}
           const rowBg = i % 2 === 0 ? '#ffffff' : '#f8fafc'
           const p = 'padding:5px 7px;'
 
-          // Status warna berdasarkan N-1
-          const n1 = (d.beban_puncak_malam||0) - (d.dm_pasok||0)
-          const statusColor = n1 < -50 ? '#22c55e' : n1 < 0 ? '#eab308' : '#ef4444'
-          const statusLabel = n1 < -50 ? 'NORMAL' : n1 < 0 ? 'SIAGA' : 'KRITIS'
+          // Formula STATUS sama persis dengan dashboard:
+          // cadMalam = dm_pasok - beban_puncak_malam
+          // cadMalam < 0          → KRITIS  (defisit)
+          // 0 <= cadMalam < max_dm → SIAGA
+          // cadMalam >= max_dm     → NORMAL
+          const cadSiang = (d.dm_pasok||0) - (d.beban_puncak_siang||0)
+          const cadMalam = (d.dm_pasok||0) - (d.beban_puncak_malam||0)
+          const maxDm    = d.max_dm||0
+          const n1       = cadMalam - maxDm  // N-1 = cadMalam - maxDM
+
+          let statusLabel, statusBg, statusFg
+          if (cadMalam < 0) {
+            statusLabel = 'KRITIS'; statusBg = '#fee2e2'; statusFg = '#991b1b'
+          } else if (cadMalam < maxDm) {
+            statusLabel = 'SIAGA';  statusBg = '#fef3c7'; statusFg = '#92400e'
+          } else {
+            statusLabel = 'NORMAL'; statusBg = '#d1fae5'; statusFg = '#065f46'
+          }
 
           rows_html += `<tr style="background:${rowBg};">
             <td style="${p}text-align:center;">${i+1}</td>
             <td style="${p}font-weight:600;white-space:nowrap;">${d.nama_unit}</td>
             <td style="${p}text-align:right;">${fmtN0(d.dm_terpasang)}</td>
-            <td style="${p}text-align:right;">${fmtNum(d.dm_pasok)}</td>
             <td style="${p}text-align:right;">${fmtNum(d.beban_puncak_siang)}</td>
+            <td style="${p}text-align:right;">${fmtN0(cadSiang)}</td>
             <td style="${p}text-align:right;font-weight:600;">${fmtNum(d.beban_puncak_malam)}</td>
-            <td style="${p}text-align:right;">${fmtNum(d.max_dm)}</td>
+            <td style="${p}text-align:right;">${fmtN0(cadMalam < 0 ? 0 : cadMalam)}</td>
+            <td style="${p}text-align:right;font-weight:600;">${n1}</td>
             <td style="${p}text-align:center;">${d.jumlah_operasi||0}</td>
             <td style="${p}text-align:center;">${d.jumlah_standby||0}</td>
             <td style="${p}text-align:center;">${d.jumlah_pemeliharaan||0}</td>
             <td style="${p}text-align:center;">${d.jumlah_gangguan||0}</td>
             <td style="${p}text-align:center;">${d.jumlah_rusak||0}</td>
-            <td style="${p}text-align:center;font-weight:700;color:${statusColor};">${statusLabel}</td>
+            <td style="${p}text-align:center;font-weight:700;background:${statusBg};color:${statusFg};">${statusLabel}</td>
           </tr>`
         })
 
         // Row total
+        const totN1 = totCadMalam - (rows.reduce((s,d)=>s+(d.max_dm||0),0))
         rows_html += `<tr style="background:#1e3a5f;color:#fff;font-weight:700;">
           <td colspan="2" style="padding:5px 7px;text-align:center;">TOTAL</td>
-          <td style="padding:5px 7px;text-align:right;">${totDmTerpasang.toLocaleString('id-ID')}</td>
-          <td style="padding:5px 7px;text-align:right;">${totDmPasok.toLocaleString('id-ID')}</td>
+          <td style="padding:5px 7px;text-align:right;">${totMaks.toLocaleString('id-ID')}</td>
           <td style="padding:5px 7px;text-align:right;">${totBpSiang.toLocaleString('id-ID')}</td>
+          <td style="padding:5px 7px;text-align:right;">${totCadSiang.toLocaleString('id-ID')}</td>
           <td style="padding:5px 7px;text-align:right;">${totBpMalam.toLocaleString('id-ID')}</td>
-          <td style="padding:5px 7px;text-align:right;">—</td>
+          <td style="padding:5px 7px;text-align:right;">${totCadMalam.toLocaleString('id-ID')}</td>
+          <td style="padding:5px 7px;text-align:right;">${totN1.toLocaleString('id-ID')}</td>
           <td style="padding:5px 7px;text-align:center;">${totOps}</td>
           <td style="padding:5px 7px;text-align:center;">${totStby}</td>
           <td style="padding:5px 7px;text-align:center;">${totPem}</td>
@@ -387,11 +405,12 @@ tr:last-child td{border-bottom:none;}
     <thead><tr>
       <th style="${th}">NO</th>
       <th style="${th}text-align:left;">ULD</th>
-      <th style="${th}">DM<br>TERPASANG</th>
-      <th style="${th}">DM<br>PASOK</th>
+      <th style="${th}">MAKS</th>
       <th style="${th}">BP<br>SIANG</th>
+      <th style="${th}">CAD<br>SIANG</th>
       <th style="${th}">BP<br>MALAM</th>
-      <th style="${th}">MAX<br>DM</th>
+      <th style="${th}">CAD<br>MALAM</th>
+      <th style="${th}">N-1</th>
       <th style="${th}">OPS</th>
       <th style="${th}">STBY</th>
       <th style="${th}">PEM</th>
@@ -433,8 +452,31 @@ tr:last-child td{border-bottom:none;}
           }
         } catch(e) { console.error(`[IMGBB-NERACA] Error: ${e.message}`) }
 
+        // Kirim WA jika ada nomor atau group
+        const { nomor, group, message: waMsg } = JSON.parse(body || '{}')
+        let waResult = null
+        if ((nomor || group) && imgUrl) {
+          try {
+            const caption = waMsg || `⚡ *NERACA DAYA KALSELTENG — ${tglFmt}*\nData beban puncak malam seluruh ULD\n_AMC UID KASELTENG_`
+            const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
+            let waEndpoint = ''
+            if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
+            else       { payload.group  = group;  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
+            const waRes = await fetch(waEndpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            })
+            waResult = await waRes.json()
+            console.log(`[WA-NERACA] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
+          } catch(e) {
+            console.error(`[WA-NERACA] Error: ${e.message}`)
+            waResult = { error: e.message }
+          }
+        }
+
         res.writeHead(200, {'Content-Type':'application/json'})
-        res.end(JSON.stringify({ success: !!imgUrl, url: imgUrl, error: imgUrl ? undefined : 'imgbb upload gagal' }))
+        res.end(JSON.stringify({ success: !!imgUrl, url: imgUrl, wa: waResult, error: imgUrl ? undefined : 'imgbb upload gagal' }))
 
       } catch(e) {
         if (!res.headersSent) {
