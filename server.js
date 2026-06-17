@@ -37,23 +37,43 @@ function findChromeExecutable() {
 }
 
 async function getBrowser() {
-  if (!browser) {
-    const launchOptions = {
-      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process']
+  // Jika browser masih ada, coba verifikasi masih hidup
+  if (browser) {
+    try {
+      // Cek apakah browser masih connected
+      const ctx = await browser.newContext()
+      await ctx.close()
+      return browser
+    } catch(e) {
+      console.log('[browser] Stale browser detected, relaunching...')
+      try { await browser.close() } catch(_) {}
+      browser = null
     }
-    const execPath = findChromeExecutable()
-    if (execPath) {
-      console.log(`[browser] Using executable: ${execPath}`)
-      launchOptions.executablePath = execPath
-    } else {
-      console.log('[browser] No executable found, letting playwright decide...')
-    }
-    browser = await chromium.launch(launchOptions)
   }
+  // Launch fresh browser — TANPA --single-process (penyebab crash di Render)
+  const launchOptions = {
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-software-rasterizer',
+      '--disable-extensions',
+      '--no-zygote'
+    ]
+  }
+  const execPath = findChromeExecutable()
+  if (execPath) {
+    console.log(`[browser] Using executable: ${execPath}`)
+    launchOptions.executablePath = execPath
+  } else {
+    console.log('[browser] No executable found, letting playwright decide...')
+  }
+  browser = await chromium.launch(launchOptions)
   return browser
 }
 
-const DEPLOY_VERSION = 'v10-TESTED-wget-works-20260617'
+const DEPLOY_VERSION = 'v11-fix-single-process-20260617'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
@@ -368,6 +388,12 @@ tr:last-child td{border-bottom:none;}
         }
 
       } catch(e) {
+        // Reset browser jika error (stale context / crash)
+        if (e.message && (e.message.includes('closed') || e.message.includes('crashed') || e.message.includes('Target'))) {
+          console.log('[browser] Resetting stale browser due to error:', e.message.slice(0,80))
+          try { if (browser) await browser.close() } catch(_) {}
+          browser = null
+        }
         if (!res.headersSent) {
           res.writeHead(200, {'Content-Type':'application/json'})
           res.end(JSON.stringify({ success: false, error: e.message }))
@@ -594,6 +620,12 @@ tr:last-child td{border-bottom:none;}
         }
 
       } catch(e) {
+        // Reset browser jika error (stale context / crash)
+        if (e.message && (e.message.includes('closed') || e.message.includes('crashed') || e.message.includes('Target'))) {
+          console.log('[browser] Resetting stale browser (neraca):', e.message.slice(0,80))
+          try { if (browser) await browser.close() } catch(_) {}
+          browser = null
+        }
         if (!res.headersSent) {
           res.writeHead(200, {'Content-Type':'application/json'})
           res.end(JSON.stringify({ success: false, error: e.message }))
