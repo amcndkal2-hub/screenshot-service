@@ -159,6 +159,95 @@ const server = http.createServer(async (req, res) => {
     return
   }
 
+  // ── /screenshot-neraca-debug — jalankan screenshot+WA SYNCHRONOUS, return hasil detail
+  if (req.method === 'POST' && url.pathname === '/screenshot-neraca-debug') {
+    let body = ''
+    req.on('data', d => body += d)
+    req.on('end', async () => {
+      try {
+        const parsed = JSON.parse(body || '{}')
+        const { tanggal, origin, nomor, group, message: waMsg } = parsed
+        const baseUrl = origin || 'https://mesin-monitor.pages.dev'
+        const tgl = tanggal || new Date().toISOString().split('T')[0]
+        const tglFmt = tgl.split('-').reverse().join('.')
+
+        // 1. Ambil data
+        const apiRes = await fetch(`${baseUrl}/api/neraca-daya?tanggal=${tgl}`)
+        const apiJson = await apiRes.json()
+        if (!apiJson.success || !apiJson.data?.length) {
+          res.writeHead(200, {'Content-Type':'application/json'})
+          res.end(JSON.stringify({ success: false, step: 'fetch-data', error: `Data kosong untuk ${tgl}` }))
+          return
+        }
+        const rows = apiJson.data
+
+        // 2. Build HTML minimal
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,sans-serif;font-size:11px;}
+body{background:#f1f5f9;padding:10px;display:inline-block;}
+.wrap{background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.12);display:inline-block;padding:10px;}
+</style></head><body><div class="wrap">
+<h3 style="color:#1e3a5f">NERACA DAYA ${tglFmt} — ${rows.length} ULD</h3>
+<p style="color:#475569">Test screenshot sync</p>
+</div></body></html>`
+
+        // 3. Screenshot
+        const br = await getBrowser()
+        const ctx = await br.newContext({ viewport:{ width:400, height:200 }, deviceScaleFactor:2 })
+        const page = await ctx.newPage()
+        await page.setContent(html, { waitUntil:'domcontentloaded' })
+        const el = await page.$('.wrap')
+        const shot = await el.screenshot({ type:'png' })
+        await ctx.close()
+        const b64 = shot.toString('base64')
+        const imgSize = shot.length
+
+        // 4. Upload imgbb
+        let imgUrl = '', imgbbResult = null
+        try {
+          const upForm = new URLSearchParams()
+          upForm.append('key',   'bb2f97ad9b31b5ae4967eeead61e03de')
+          upForm.append('image', b64)
+          upForm.append('name',  `DEBUG_NERACA_${tgl}_${Date.now()}`)
+          const imgRes  = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body: upForm })
+          imgbbResult   = await imgRes.json()
+          if (imgbbResult.success && imgbbResult.data?.url) imgUrl = imgbbResult.data.url
+        } catch(e) { imgbbResult = { error: e.message } }
+
+        // 5. Kirim WA jika ada target
+        let waResult = null
+        if ((nomor || group) && imgUrl) {
+          try {
+            const caption = waMsg || `⚡ *NERACA DAYA KALSELTENG — ${tglFmt}*\n_Debug sync test_`
+            const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
+            let waEndpoint = ''
+            if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
+            else       { payload.group  = group;  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
+            const waRes = await fetch(waEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+            waResult = await waRes.json()
+          } catch(e) { waResult = { error: e.message } }
+        }
+
+        res.writeHead(200, {'Content-Type':'application/json'})
+        res.end(JSON.stringify({
+          success: true,
+          step: 'done',
+          data_rows: rows.length,
+          screenshot_bytes: imgSize,
+          imgbb: { success: imgbbResult?.success, url: imgUrl, error: imgbbResult?.error },
+          wa: waResult,
+          target: nomor ? `nomor:${nomor}` : group ? `group:${group}` : 'none'
+        }))
+      } catch(e) {
+        if (!res.headersSent) {
+          res.writeHead(200, {'Content-Type':'application/json'})
+          res.end(JSON.stringify({ success: false, step: 'exception', error: e.message }))
+        }
+      }
+    })
+    return
+  }
+
   if (req.method === 'POST' && url.pathname === '/screenshot-hop') {
     let body = ''
     req.on('data', d => body += d)
