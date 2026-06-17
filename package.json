@@ -1,15 +1,12 @@
 {
   "name": "screenshot-service",
   "version": "1.0.0",
+  "description": "Screenshot service for Render.com",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build": "echo 'build done - chromium installs at runtime'"
+    "build": "npx playwright install --only-shell chromium"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "Playwright screenshot service for mesin-monitor",
   "dependencies": {
     "playwright": "^1.49.0"
   },

@@ -53,7 +53,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v7-auto-find-executable-20260616'
+const DEPLOY_VERSION = 'v8-build-time-install-20260617'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
