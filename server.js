@@ -7,20 +7,53 @@ const WHACENTER_DEVICE_ID = '550fd04ee9fc7c4b4e057d0bce6270f3'
 
 let browser = null
 
+// Cari chrome binary di PLAYWRIGHT_BROWSERS_PATH secara otomatis
+// Playwright headless di Linux pakai chromium_headless_shell, tapi kita bisa
+// paksa pakai chromium full dengan explicit executablePath
+function findChromeExecutable() {
+  // Prioritas 1: env var eksplisit
+  if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
+    return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+  }
+  const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH ||
+    path.join(require('os').homedir(), '.cache', 'ms-playwright')
+  try {
+    const dirs = fs.readdirSync(browsersPath)
+    // Prioritas 2: chromium_headless_shell (jika sudah terinstall)
+    const shellDir = dirs.find(d => d.startsWith('chromium_headless_shell'))
+    if (shellDir) {
+      // chrome-headless-shell-linux64/chrome-headless-shell
+      const shellExec = path.join(browsersPath, shellDir, 'chrome-headless-shell-linux64', 'chrome-headless-shell')
+      if (fs.existsSync(shellExec)) return shellExec
+    }
+    // Prioritas 3: chromium full (fallback)
+    const chromiumDir = dirs.find(d => d.startsWith('chromium-'))
+    if (chromiumDir) {
+      const chromExec = path.join(browsersPath, chromiumDir, 'chrome-linux64', 'chrome')
+      if (fs.existsSync(chromExec)) return chromExec
+    }
+  } catch(e) { /* ignore */ }
+  return null
+}
+
 async function getBrowser() {
   if (!browser) {
     const launchOptions = {
-      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']
+      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--single-process']
     }
-    if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
-      launchOptions.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+    const execPath = findChromeExecutable()
+    if (execPath) {
+      console.log(`[browser] Using executable: ${execPath}`)
+      launchOptions.executablePath = execPath
+    } else {
+      console.log('[browser] No executable found, letting playwright decide...')
     }
     browser = await chromium.launch(launchOptions)
   }
   return browser
 }
 
-const DEPLOY_VERSION = 'v6-build-install-20260616'
+const DEPLOY_VERSION = 'v7-auto-find-executable-20260616'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
