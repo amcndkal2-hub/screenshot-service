@@ -5,6 +5,26 @@ const fs = require('fs')
 
 const WHACENTER_DEVICE_ID = '550fd04ee9fc7c4b4e057d0bce6270f3'
 
+// ── Upload image buffer ke litterbox.catbox.moe (gratis, tanpa API key)
+// Mengembalikan URL string atau throw error
+async function uploadImage(buffer, filename) {
+  const fname = filename || `img_${Date.now()}.png`
+  const blob = new Blob([buffer], { type: 'image/png' })
+  const form = new FormData()
+  form.append('reqtype', 'fileupload')
+  form.append('time', '24h')        // URL aktif 24 jam
+  form.append('fileToUpload', blob, fname)
+
+  const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
+    method: 'POST',
+    body: form
+  })
+  const text = await res.text()
+  // Litterbox return plain URL jika sukses, atau pesan error
+  if (text.startsWith('https://')) return text.trim()
+  throw new Error(`litterbox upload failed: ${text.trim()}`)
+}
+
 let browser = null
 
 // Cari chrome binary di PLAYWRIGHT_BROWSERS_PATH secara otomatis
@@ -73,7 +93,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v11-fix-single-process-20260617'
+const DEPLOY_VERSION = 'v12-fix-imgbb-litterbox-20260617'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
@@ -202,17 +222,16 @@ body{background:#f1f5f9;padding:10px;display:inline-block;}
         const b64 = shot.toString('base64')
         const imgSize = shot.length
 
-        // 4. Upload imgbb
-        let imgUrl = '', imgbbResult = null
+        // 4. Upload gambar ke litterbox.catbox.moe
+        let imgUrl = '', uploadResult = null
         try {
-          const upForm = new URLSearchParams()
-          upForm.append('key',   'bb2f97ad9b31b5ae4967eeead61e03de')
-          upForm.append('image', b64)
-          upForm.append('name',  `DEBUG_NERACA_${tgl}_${Date.now()}`)
-          const imgRes  = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body: upForm })
-          imgbbResult   = await imgRes.json()
-          if (imgbbResult.success && imgbbResult.data?.url) imgUrl = imgbbResult.data.url
-        } catch(e) { imgbbResult = { error: e.message } }
+          imgUrl = await uploadImage(shot, `DEBUG_NERACA_${tgl}_${Date.now()}.png`)
+          uploadResult = { success: true, url: imgUrl }
+          console.log(`[UPLOAD-DEBUG] OK → ${imgUrl}`)
+        } catch(e) {
+          uploadResult = { success: false, error: e.message }
+          console.error(`[UPLOAD-DEBUG] FAIL: ${e.message}`)
+        }
 
         // 5. Kirim WA jika ada target
         let waResult = null
@@ -234,7 +253,7 @@ body{background:#f1f5f9;padding:10px;display:inline-block;}
           step: 'done',
           data_rows: rows.length,
           screenshot_bytes: imgSize,
-          imgbb: { success: imgbbResult?.success, url: imgUrl, error: imgbbResult?.error },
+          upload: { success: uploadResult?.success, url: imgUrl, error: uploadResult?.error },
           wa: waResult,
           target: nomor ? `nomor:${nomor}` : group ? `group:${group}` : 'none'
         }))
@@ -414,23 +433,10 @@ tr:last-child td{border-bottom:none;}
               const caption = waMsg || `📊 *HOP BBM KALSELTENG — ${tglFmt}*\nData stok & estimasi BBM per ULD (data H-1)\n_AMC UID KASELTENG_`
 
               try {
-                const upForm = new URLSearchParams()
-                upForm.append('key', 'bb2f97ad9b31b5ae4967eeead61e03de')
-                upForm.append('image', b64)
-                upForm.append('name', `HOP_BBM_${tgl}_${Date.now()}`)
-                const imgRes = await fetch('https://api.imgbb.com/1/upload', {
-                  method: 'POST',
-                  body: upForm
-                })
-                const imgJson = await imgRes.json()
-                if (imgJson.success && imgJson.data?.url) {
-                  imgUrl = imgJson.data.url
-                  console.log(`[IMGBB] Upload OK → ${imgUrl}`)
-                } else {
-                  console.error(`[IMGBB] Upload FAIL: ${JSON.stringify(imgJson)}`)
-                }
+                imgUrl = await uploadImage(shot, `HOP_BBM_${tgl}_${Date.now()}.png`)
+                console.log(`[UPLOAD-HOP] OK → ${imgUrl}`)
               } catch(e) {
-                console.error(`[IMGBB] Error: ${e.message}`)
+                console.error(`[UPLOAD-HOP] FAIL: ${e.message}`)
               }
 
               if (imgUrl) {
@@ -456,7 +462,7 @@ tr:last-child td{border-bottom:none;}
                 console.log(`[WA] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
               } else {
                 console.error(`[WA] Skip kirim — imgUrl kosong`)
-                waResult = { error: 'imgUrl kosong, upload imgbb gagal' }
+                waResult = { error: 'imgUrl kosong, upload gagal' }
               }
             } catch(e) {
               console.error(`[WA] Error kirim: ${e.message}`)
@@ -659,19 +665,9 @@ tr:last-child td{border-bottom:none;}
             let imgUrl = ''
             try {
               try {
-                const upForm = new URLSearchParams()
-                upForm.append('key',   'bb2f97ad9b31b5ae4967eeead61e03de')
-                upForm.append('image', b64)
-                upForm.append('name',  `NERACA_${tgl}_${Date.now()}`)
-                const imgRes  = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body: upForm })
-                const imgJson = await imgRes.json()
-                if (imgJson.success && imgJson.data?.url) {
-                  imgUrl = imgJson.data.url
-                  console.log(`[IMGBB-NERACA] Upload OK → ${imgUrl}`)
-                } else {
-                  console.error(`[IMGBB-NERACA] FAIL: ${JSON.stringify(imgJson)}`)
-                }
-              } catch(e) { console.error(`[IMGBB-NERACA] Error: ${e.message}`) }
+                imgUrl = await uploadImage(shot, `NERACA_${tgl}_${Date.now()}.png`)
+                console.log(`[UPLOAD-NERACA] OK → ${imgUrl}`)
+              } catch(e) { console.error(`[UPLOAD-NERACA] FAIL: ${e.message}`) }
 
               if (imgUrl) {
                 const caption = waMsg || `⚡ *NERACA DAYA KALSELTENG — ${tglFmt}*\nData beban puncak malam seluruh ULD\n_AMC UID KASELTENG_`
