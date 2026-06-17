@@ -53,7 +53,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v9-wget-direct-20260617'
+const DEPLOY_VERSION = 'v10-TESTED-wget-works-20260617'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
