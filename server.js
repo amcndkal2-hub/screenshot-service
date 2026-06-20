@@ -93,8 +93,14 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v13-render-poll-hop-20260620b'
+const DEPLOY_VERSION = 'v14-no-pending-flag-20260620'
 const CF_ORIGIN = 'https://mesin-monitor.pages.dev'
+
+// ── Anti-duplikat internal Render ───────────────────────────────────────────
+// Set tanggal yang sedang diproses agar request ganda (dari CF cron setiap menit)
+// tidak trigger screenshot bersamaan. Dihapus saat callback berhasil atau error.
+const hopProcessing   = new Set()   // tanggal HOP yang sedang diproses
+const neracaProcessing = new Set()  // tanggal Neraca yang sedang diproses
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
@@ -276,6 +282,15 @@ body{background:#f1f5f9;padding:10px;display:inline-block;}
         const { tanggal, origin } = JSON.parse(body || '{}')
         const baseUrl = origin || 'https://mesin-monitor.pages.dev'
         const tgl = tanggal || new Date().toISOString().split('T')[0]
+
+        // Guard duplikat: jika tanggal ini sedang diproses, tolak
+        if (hopProcessing.has(tgl)) {
+          res.writeHead(200, {'Content-Type':'application/json'})
+          res.end(JSON.stringify({ queued: true, reason: `HOP ${tgl} sedang diproses` }))
+          return
+        }
+        hopProcessing.add(tgl)
+        console.log(`[screenshot-hop] Mulai proses ${tgl}`)
 
         // Ambil data stok
         const apiRes = await fetch(`${baseUrl}/api/data-stok?tanggal=${tgl}`)
@@ -480,10 +495,12 @@ tr:last-child td{border-bottom:none;}
                 console.log(`[CB] Callback OK → ${callbackUrl}`)
               } catch(e) { console.error(`[CB] Callback error: ${e.message}`) }
             }
+            hopProcessing.delete(tgl)  // selesai — boleh proses lagi jika retry
           })()
         }
 
       } catch(e) {
+        hopProcessing.delete(tgl)  // error — hapus agar retry bisa masuk
         // Reset browser jika error (stale context / crash)
         if (e.message && (e.message.includes('closed') || e.message.includes('crashed') || e.message.includes('Target'))) {
           console.log('[browser] Resetting stale browser due to error:', e.message.slice(0,80))
@@ -511,6 +528,15 @@ tr:last-child td{border-bottom:none;}
         const baseUrl = origin || 'https://mesin-monitor.pages.dev'
         const tgl = tanggal || new Date().toISOString().split('T')[0]
         const tglFmt = tgl.split('-').reverse().join('.')
+
+        // Guard duplikat: jika tanggal ini sedang diproses, tolak
+        if (neracaProcessing.has(tgl)) {
+          res.writeHead(200, {'Content-Type':'application/json'})
+          res.end(JSON.stringify({ queued: true, reason: `Neraca ${tgl} sedang diproses` }))
+          return
+        }
+        neracaProcessing.add(tgl)
+        console.log(`[screenshot-neraca] Mulai proses ${tgl}`)
 
         const apiRes = await fetch(`${baseUrl}/api/neraca-daya?tanggal=${tgl}`)
         const apiJson = await apiRes.json()
@@ -702,10 +728,12 @@ tr:last-child td{border-bottom:none;}
                 console.log(`[CB-NERACA] Callback OK → ${callbackUrl}`)
               } catch(e) { console.error(`[CB-NERACA] Callback error: ${e.message}`) }
             }
+            neracaProcessing.delete(tgl)  // selesai — boleh proses lagi jika retry
           })()
         }
 
       } catch(e) {
+        neracaProcessing.delete(tgl)  // error — hapus agar retry bisa masuk
         // Reset browser jika error (stale context / crash)
         if (e.message && (e.message.includes('closed') || e.message.includes('crashed') || e.message.includes('Target'))) {
           console.log('[browser] Resetting stale browser (neraca):', e.message.slice(0,80))
