@@ -93,7 +93,8 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v12-fix-imgbb-litterbox-20260617'
+const DEPLOY_VERSION = 'v13-render-poll-hop-20260620'
+const CF_ORIGIN = 'https://mesin-monitor.pages.dev'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
 // chromium-1217, chromium_headless_shell-1217, dll.
@@ -745,4 +746,223 @@ server.listen(PORT, '0.0.0.0', () => {
       await fetch(`http://localhost:${PORT}/health`, { signal: AbortSignal.timeout(5000) })
     } catch(e) { /* ignore */ }
   }, 14 * 60 * 1000)
+
+  // ── POLL HOP-CHECK setiap 60 detik ──────────────────────────────────────
+  // Render sendiri yang cek ke CF apakah ada HOP BBM yang perlu dikirim
+  // Ini menggantikan ketergantungan pada CF cron scheduled (tidak reliable)
+  let hopPollRunning = false
+  setInterval(async () => {
+    if (hopPollRunning) return  // skip jika masih proses sebelumnya
+    hopPollRunning = true
+    try {
+      const checkRes = await fetch(`${CF_ORIGIN}/api/hop-check`, {
+        signal: AbortSignal.timeout(15000)
+      })
+      const checkJson = await checkRes.json()
+
+      if (!checkJson.perlu_kirim) {
+        // Tidak ada yang perlu dikirim, skip
+        hopPollRunning = false
+        return
+      }
+
+      const { tanggal, origin, callbackUrl } = checkJson
+      const tglFmt = tanggal.split('-').reverse().join('.')
+      console.log(`[poll-hop] Perlu kirim HOP BBM ${tglFmt}, mulai screenshot...`)
+
+      // Ambil data stok dari CF
+      const apiRes = await fetch(`${origin}/api/data-stok?tanggal=${tanggal}`, {
+        signal: AbortSignal.timeout(15000)
+      })
+      const apiJson = await apiRes.json()
+      if (!apiJson.success || !apiJson.data?.length) {
+        console.error(`[poll-hop] data-stok kosong untuk ${tanggal}`)
+        hopPollRunning = false
+        return
+      }
+
+      // Ambil penerima dari CF (wa-penerima-hop)
+      let penerima = [{ type: 'grup', target: 'AMC UID KASELTENG' }]
+      try {
+        const penRes = await fetch(`${origin}/api/kv-get?key=wa-penerima-hop`, {
+          signal: AbortSignal.timeout(5000)
+        })
+        const penJson = await penRes.json()
+        if (penJson.value) penerima = JSON.parse(penJson.value)
+      } catch(_) {}
+
+      // Ambil data HOP info
+      let hopMap = {}
+      try {
+        const hopRes = await fetch(`${origin}/api/hop-info`, { signal: AbortSignal.timeout(5000) })
+        const hopJson = await hopRes.json()
+        if (hopJson.success && hopJson.data) hopMap = hopJson.data
+      } catch(e) {}
+
+      // Buat HTML + screenshot (reuse logika dari /screenshot-hop)
+      const rows = apiJson.data
+      const BULAN = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']
+      function fmtNum(val) {
+        if (val === null || val === undefined) return '<span style="color:#94a3b8">—</span>'
+        return Number(val).toLocaleString('id-ID')
+      }
+      function fmtEst(s) {
+        if (!s) return '—'
+        const p = s.split('-')
+        return parseInt(p[2],10) + ' ' + BULAN[parseInt(p[1],10)-1]
+      }
+      let rows_html = ''
+      rows.forEach((d, i) => {
+        const ku = d.kode_unit
+        const hopInfo = hopMap[ku] || {}
+        const kondisiColor = d.kondisi_stock === 'KRITIS' ? '#ef4444'
+                           : d.kondisi_stock === 'SIAGA'  ? '#eab308'
+                           : d.kondisi_stock === 'AMAN'   ? '#22c55e'
+                           : '#475569'
+        const ssBg = d.safety_stock == null    ? ''
+                   : d.safety_stock < 5         ? 'background:#ef4444;color:#fff;'
+                   : d.safety_stock <= 7        ? 'background:#eab308;color:#fff;'
+                   :                              'background:#22c55e;color:#fff;'
+        const uldColor = (d.stok_awal === null || d.stok_awal === undefined) ? '#cbd5e1' : '#1e3a5f'
+        const rowBg    = i % 2 === 0 ? '#ffffff' : '#f8fafc'
+        const showHop  = d.safety_stock != null && d.safety_stock < 8
+        const p = 'padding:4px 6px;'
+        rows_html += `<tr style="background:${rowBg};">
+          <td style="${p}text-align:center;">${i+1}</td>
+          <td style="${p}font-weight:600;color:${uldColor};white-space:nowrap;">${d.nama_unit}</td>
+          <td style="${p}white-space:nowrap;">${d.jalur||'—'}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.kapasitas_tangki)}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.stok_awal_bulan)}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.saldo_akhir)}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.stock_mati)}</td>
+          <td style="${p}text-align:right;font-weight:600;">${fmtNum(d.stock_bersih)}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.pemakaian_bbm)}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.pemakaian_rata_rata)}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.rata_rata_harian)}</td>
+          <td style="${p}text-align:right;">${d.daya_tampung_storage!=null ? Math.round(d.daya_tampung_storage*100)+'%' : '—'}</td>
+          <td style="${p}text-align:right;font-weight:600;">${fmtNum(d.bbm_siap_kirim)}</td>
+          <td style="${p}text-align:right;font-weight:600;${ssBg}">${fmtNum(d.safety_stock)}</td>
+          <td style="${p}text-align:center;">${fmtEst(d.estimasi_bbm_habis)}</td>
+          <td style="${p}text-align:center;font-weight:700;color:${kondisiColor};">${d.kondisi_stock||'—'}</td>
+          <td style="${p}text-align:center;color:#475569;">${showHop?(hopInfo.posisi_terakhir||'—'):'—'}</td>
+          <td style="${p}text-align:center;color:#475569;">${showHop?(hopInfo.estimasi_tiba||'—'):'—'}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.total_penerimaan)}</td>
+          <td style="${p}text-align:right;">${fmtNum(d.total_pemakaian)}</td>
+        </tr>`
+      })
+      const th = 'background:#1e3a5f;color:#fff;padding:6px 6px;text-align:center;white-space:nowrap;border-right:1px solid #4a7ab5;'
+      const now = new Date()
+      const tsStr = now.toLocaleString('id-ID', { timeZone:'Asia/Jakarta', hour12:false }).replace(',','')
+      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,sans-serif;font-size:11px;}
+body{background:#f1f5f9;padding:10px;display:inline-block;}
+.wrap{background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.12);display:inline-block;}
+.title{background:#1e3a5f;color:#fff;padding:8px 12px;font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center;}
+.title-ts{font-size:9px;color:#94a3b8;font-weight:400;margin-left:16px;white-space:nowrap;}
+.sub{background:#1e3a5f;color:#94a3b8;padding:1px 12px 7px;font-size:10px;}
+table{border-collapse:collapse;width:auto;}
+td{border-right:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;}
+td:last-child{border-right:none;}
+tr:last-child td{border-bottom:none;}
+</style></head><body>
+<div class="wrap">
+  <div class="title">
+    <span>📊 HOP BBM KALSELTENG — ${tglFmt}</span>
+    <span class="title-ts">dibuat: ${tsStr} WIB</span>
+  </div>
+  <div class="sub">Data stok &amp; estimasi BBM per ULD (H-1) · AMC UID KASELTENG</div>
+  <table>
+    <thead><tr>
+      <th style="${th}">NO</th>
+      <th style="${th}text-align:left;">ULD</th>
+      <th style="${th}text-align:left;">JALUR</th>
+      <th style="${th}">KAP.</th>
+      <th style="${th}">SALDO<br>AWL BLN</th>
+      <th style="${th}">SALDO<br>AKHIR</th>
+      <th style="${th}">STK<br>MATI</th>
+      <th style="${th}">STK<br>BERSIH</th>
+      <th style="${th}">PAKAI<br>BBM</th>
+      <th style="${th}">PAKAI<br>RATA</th>
+      <th style="${th}">PAKAI<br>TRTNG</th>
+      <th style="${th}">DAYA<br>TAMP.</th>
+      <th style="${th}">BBM<br>SIAP</th>
+      <th style="${th}">SAFETY<br>STOCK</th>
+      <th style="${th}">EST.<br>HABIS</th>
+      <th style="${th}">KONDISI<br>STOCK</th>
+      <th style="${th}">POSISI<br>TRKHR</th>
+      <th style="${th}">EST.<br>TIBA</th>
+      <th style="${th}">TOT<br>TRIMA</th>
+      <th style="${th}border-right:none;">TOT<br>PAKAI</th>
+    </tr></thead>
+    <tbody>${rows_html}</tbody>
+  </table>
+</div></body></html>`
+
+      // Screenshot
+      const br = await getBrowser()
+      const ctx2 = await br.newContext({ viewport: { width: 100, height: 100 }, deviceScaleFactor: 2 })
+      const page = await ctx2.newPage()
+      await page.setContent(html, { waitUntil: 'networkidle' })
+      await page.waitForTimeout(200)
+      const el  = await page.$('.wrap')
+      const box = await el.boundingBox()
+      await page.setViewportSize({ width: Math.ceil(box.width+box.x*2), height: Math.ceil(box.height+box.y*2) })
+      const shot = await el.screenshot({ type: 'png' })
+      await ctx2.close()
+      console.log(`[poll-hop] Screenshot OK untuk ${tglFmt}`)
+
+      // Upload ke litterbox
+      let imgUrl = ''
+      try {
+        imgUrl = await uploadImage(shot, `HOP_BBM_${tanggal}_${Date.now()}.png`)
+        console.log(`[poll-hop] Upload OK → ${imgUrl}`)
+      } catch(e) {
+        console.error(`[poll-hop] Upload GAGAL: ${e.message}`)
+      }
+
+      if (!imgUrl) {
+        hopPollRunning = false
+        return
+      }
+
+      // Kirim ke semua penerima
+      const caption = `📊 *HOP BBM KALSELTENG — ${tglFmt}*\nData stok & estimasi BBM per ULD (data H-1)\n_AMC UID KASELTENG_`
+      let adaBerhasil = false
+      for (const p of penerima) {
+        try {
+          const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
+          let waEndpoint = ''
+          if (p.type === 'nomor') { payload.number = p.target; waEndpoint = 'https://app.whacenter.com/api/send' }
+          else                    { payload.group  = p.target; waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
+          const waRes  = await fetch(waEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+          const waJson = await waRes.json()
+          if (waJson.status) {
+            adaBerhasil = true
+            console.log(`[poll-hop] WA OK → ${p.type} ${p.target}`)
+          } else {
+            console.error(`[poll-hop] WA FAIL → ${p.type} ${p.target}: ${JSON.stringify(waJson)}`)
+          }
+        } catch(e) {
+          console.error(`[poll-hop] WA error → ${p.type} ${p.target}: ${e.message}`)
+        }
+      }
+
+      // Callback ke CF jika berhasil
+      if (adaBerhasil && callbackUrl) {
+        try {
+          await fetch(callbackUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tanggal, status: 'sent' })
+          })
+          console.log(`[poll-hop] Callback OK → ${callbackUrl}`)
+        } catch(e) { console.error(`[poll-hop] Callback error: ${e.message}`) }
+      }
+
+    } catch(e) {
+      console.error(`[poll-hop] Error: ${e.message}`)
+    }
+    hopPollRunning = false
+  }, 60 * 1000)  // setiap 60 detik
 })
