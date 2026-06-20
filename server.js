@@ -93,7 +93,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v13-render-poll-hop-20260620'
+const DEPLOY_VERSION = 'v13-render-poll-hop-20260620b'
 const CF_ORIGIN = 'https://mesin-monitor.pages.dev'
 
 // Cek chromium via folder existence — robust untuk semua nama folder:
