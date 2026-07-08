@@ -749,6 +749,95 @@ tr:last-child td{border-bottom:none;}
     return
   }
 
+  // ── /screenshot-pbun — screenshot 6 ULD UP3 PBUN ────────────────────────
+  if (req.method === 'POST' && url.pathname === '/screenshot-pbun') {
+    let body = ''
+    req.on('data', d => body += d)
+    req.on('end', async () => {
+      try {
+        const { tanggal, origin, nomor, group, message: waMsg, callbackUrl } = JSON.parse(body || '{}')
+        const baseUrl = origin || 'https://mesin-monitor.pages.dev'
+        const tgl = tanggal || new Date().toISOString().split('T')[0]
+        const tglFmt = tgl.split('-').reverse().join('.')
+
+        // Guard duplikat
+        if (neracaProcessing.has('pbun-' + tgl)) {
+          res.writeHead(200, {'Content-Type':'application/json'})
+          res.end(JSON.stringify({ success: true, queued: true, reason: `PBUN ${tgl} sedang diproses` }))
+          return
+        }
+        neracaProcessing.add('pbun-' + tgl)
+        console.log(`[screenshot-pbun] Mulai proses ${tgl}`)
+
+        // Fetch HTML dari endpoint render PBUN
+        const htmlRes = await fetch(`${baseUrl}/api/neraca-pbun-render?tanggal=${tgl}`)
+        if (!htmlRes.ok) {
+          res.writeHead(200, {'Content-Type':'application/json'})
+          res.end(JSON.stringify({ success: false, error: `Gagal fetch HTML PBUN: ${htmlRes.status}` }))
+          neracaProcessing.delete('pbun-' + tgl)
+          return
+        }
+        const html = await htmlRes.text()
+
+        // Screenshot dengan Playwright
+        const br = await getBrowser()
+        const ctx = await br.newContext({ viewport:{ width:100, height:100 }, deviceScaleFactor:2 })
+        const page = await ctx.newPage()
+        await page.setContent(html, { waitUntil:'networkidle' })
+        await page.waitForTimeout(200)
+        const el  = await page.$('body')
+        const box = await el.boundingBox()
+        await page.setViewportSize({ width: Math.ceil(box.width + 24), height: Math.ceil(box.height + 24) })
+        const shot = await el.screenshot({ type:'png' })
+        await ctx.close()
+
+        res.writeHead(200, {'Content-Type':'application/json'})
+        res.end(JSON.stringify({ success: true, queued: true }))
+
+        // Upload + kirim WA async
+        ;(async () => {
+          let imgUrl = ''
+          try {
+            imgUrl = await uploadImage(shot, `NERACA_PBUN_${tgl}_${Date.now()}.png`)
+            console.log(`[UPLOAD-PBUN] OK → ${imgUrl}`)
+          } catch(e) { console.error(`[UPLOAD-PBUN] FAIL: ${e.message}`) }
+
+          if (imgUrl && (nomor || group)) {
+            try {
+              const caption = waMsg || `⚡ *NERACA DAYA UP3 PBUN — ${tglFmt}*\nData beban puncak malam ULD UP3 Pangkalan Bun.\n_AMC UID KASELTENG_`
+              const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
+              let waEndpoint = ''
+              if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
+              else       { payload.group  = group;  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
+              const waRes = await fetch(waEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+              const waResult = await waRes.json()
+              console.log(`[WA-PBUN] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
+
+              if (waResult?.status && callbackUrl) {
+                await fetch(callbackUrl, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ tanggal: tgl, status: 'sent' }) })
+                console.log(`[CB-PBUN] Callback OK → ${callbackUrl}`)
+              }
+            } catch(e) { console.error(`[WA-PBUN] Error: ${e.message}`) }
+          }
+          neracaProcessing.delete('pbun-' + tgl)
+        })()
+
+      } catch(e) {
+        neracaProcessing.delete('pbun-' + tgl)
+        if (e.message && (e.message.includes('closed') || e.message.includes('crashed') || e.message.includes('Target'))) {
+          console.log('[browser] Resetting stale browser (pbun):', e.message.slice(0,80))
+          try { if (browser) await browser.close() } catch(_) {}
+          browser = null
+        }
+        if (!res.headersSent) {
+          res.writeHead(200, {'Content-Type':'application/json'})
+          res.end(JSON.stringify({ success: false, error: e.message }))
+        }
+      }
+    })
+    return
+  }
+
   res.writeHead(404)
   res.end('Not found')
 })
