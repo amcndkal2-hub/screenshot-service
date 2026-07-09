@@ -524,11 +524,82 @@ tr:last-child td{border-bottom:none;}
     req.on('data', d => body += d)
     req.on('end', async () => {
       try {
-        const { tanggal, origin } = JSON.parse(body || '{}')
+        const parsed = JSON.parse(body || '{}')
+        const { tanggal, origin, type } = parsed
         const baseUrl = origin || 'https://mesin-monitor.pages.dev'
         const tgl = tanggal || new Date().toISOString().split('T')[0]
         const tglFmt = tgl.split('-').reverse().join('.')
 
+        // ── Jika type='pbun' → screenshot 6 ULD PBUN dari /api/neraca-pbun-render ──
+        if (type === 'pbun') {
+          const { nomor, group, message: waMsg, callbackUrl } = parsed
+          const guardKey = 'pbun-' + tgl
+          if (neracaProcessing.has(guardKey)) {
+            res.writeHead(200, {'Content-Type':'application/json'})
+            res.end(JSON.stringify({ success: true, queued: true, reason: `PBUN ${tgl} sedang diproses` }))
+            return
+          }
+          neracaProcessing.add(guardKey)
+          console.log(`[screenshot-pbun] Mulai proses ${tgl}`)
+
+          const htmlRes = await fetch(`${baseUrl}/api/neraca-pbun-render?tanggal=${tgl}`)
+          if (!htmlRes.ok) {
+            res.writeHead(200, {'Content-Type':'application/json'})
+            res.end(JSON.stringify({ success: false, error: `Gagal fetch HTML PBUN: ${htmlRes.status}` }))
+            neracaProcessing.delete(guardKey)
+            return
+          }
+          const html = await htmlRes.text()
+
+          res.writeHead(200, {'Content-Type':'application/json'})
+          res.end(JSON.stringify({ success: true, queued: true }))
+
+          ;(async () => {
+            try {
+              const br = await getBrowser()
+              const ctx = await br.newContext({ viewport:{ width:100, height:100 }, deviceScaleFactor:2 })
+              const page = await ctx.newPage()
+              await page.setContent(html, { waitUntil:'networkidle' })
+              await page.waitForTimeout(200)
+              const el  = await page.$('body')
+              const box = await el.boundingBox()
+              await page.setViewportSize({ width: Math.ceil(box.width + 24), height: Math.ceil(box.height + 24) })
+              const shot = await el.screenshot({ type:'png' })
+              await ctx.close()
+
+              let imgUrl = ''
+              try {
+                imgUrl = await uploadImage(shot, `NERACA_PBUN_${tgl}_${Date.now()}.png`)
+                console.log(`[UPLOAD-PBUN] OK → ${imgUrl}`)
+              } catch(e) { console.error(`[UPLOAD-PBUN] FAIL: ${e.message}`) }
+
+              if (imgUrl && (nomor || group)) {
+                const caption = waMsg || `⚡ *NERACA DAYA UP3 PBUN — ${tglFmt}*\nData beban puncak malam ULD UP3 Pangkalan Bun.\n_AMC UID KASELTENG_`
+                const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
+                let waEndpoint = ''
+                if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
+                else       { payload.group  = group;  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
+                const waRes = await fetch(waEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+                const waResult = await waRes.json()
+                console.log(`[WA-PBUN] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
+                if (waResult?.status && callbackUrl) {
+                  await fetch(callbackUrl, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ tanggal: tgl, status: 'sent' }) })
+                  console.log(`[CB-PBUN] Callback OK → ${callbackUrl}`)
+                }
+              }
+            } catch(e) {
+              console.error(`[screenshot-pbun] Error: ${e.message}`)
+              if (e.message && (e.message.includes('closed') || e.message.includes('crashed') || e.message.includes('Target'))) {
+                try { if (browser) await browser.close() } catch(_) {}
+                browser = null
+              }
+            }
+            neracaProcessing.delete(guardKey)
+          })()
+          return
+        }
+
+        // ── Default: screenshot Neraca KALSELTENG 19 ULD ──────────────────────
         // Guard duplikat: jika tanggal ini sedang diproses, tolak
         if (neracaProcessing.has(tgl)) {
           res.writeHead(200, {'Content-Type':'application/json'})
