@@ -3,6 +3,7 @@ services:
     name: screenshot-service
     runtime: node
     plan: free
+    autoDeploy: yes
     buildCommand: bash build.sh
     startCommand: node server.js
     envVars:
