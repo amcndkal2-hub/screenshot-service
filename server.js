@@ -4,10 +4,28 @@ const path = require('path')
 const fs = require('fs')
 
 const WHACENTER_DEVICE_ID = '550fd04ee9fc7c4b4e057d0bce6270f3'
+const IMGBB_API_KEY = 'bb2f97ad9b31b5ae4967eeead61e03de'
 
-// ── Upload image buffer ke litterbox.catbox.moe (gratis, tanpa API key)
+// ── Upload image buffer ke ImgBB (primary) dengan fallback ke litterbox
 // Mengembalikan URL string atau throw error
-async function uploadImage(buffer, filename) {
+async function uploadImageImgBB(buffer, filename) {
+  const fname = (filename || `img_${Date.now()}`).replace(/\.png$/, '')
+  const b64 = buffer.toString('base64')
+  const form = new URLSearchParams()
+  form.append('key', IMGBB_API_KEY)
+  form.append('image', b64)
+  form.append('name', fname)
+
+  const res = await fetch('https://api.imgbb.com/1/upload', {
+    method: 'POST',
+    body: form
+  })
+  const json = await res.json()
+  if (json.success && json.data?.url) return json.data.url
+  throw new Error(`imgbb upload failed: ${JSON.stringify(json.error || json)}`)
+}
+
+async function uploadImageLitterbox(buffer, filename) {
   const fname = filename || `img_${Date.now()}.png`
   const blob = new Blob([buffer], { type: 'image/png' })
   const form = new FormData()
@@ -17,12 +35,30 @@ async function uploadImage(buffer, filename) {
 
   const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
     method: 'POST',
-    body: form
+    body: form,
+    signal: AbortSignal.timeout(15000)
   })
   const text = await res.text()
-  // Litterbox return plain URL jika sukses, atau pesan error
   if (text.startsWith('https://')) return text.trim()
-  throw new Error(`litterbox upload failed: ${text.trim()}`)
+  throw new Error(`litterbox upload failed: ${text.slice(0, 200)}`)
+}
+
+// Primary: ImgBB, Fallback: Litterbox
+async function uploadImage(buffer, filename) {
+  try {
+    const url = await uploadImageImgBB(buffer, filename)
+    console.log(`[UPLOAD] ImgBB OK → ${url}`)
+    return url
+  } catch(e) {
+    console.warn(`[UPLOAD] ImgBB gagal (${e.message.slice(0,80)}), coba litterbox...`)
+    try {
+      const url = await uploadImageLitterbox(buffer, filename)
+      console.log(`[UPLOAD] Litterbox OK → ${url}`)
+      return url
+    } catch(e2) {
+      throw new Error(`Semua upload gagal. ImgBB: ${e.message.slice(0,60)} | Litterbox: ${e2.message.slice(0,60)}`)
+    }
+  }
 }
 
 let browser = null
@@ -93,7 +129,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v14-no-pending-flag-20260620'
+const DEPLOY_VERSION = 'v15-imgbb-primary-fallback-litterbox-20260917'
 const CF_ORIGIN = 'https://mesin-monitor.pages.dev'
 
 // ── Anti-duplikat internal Render ───────────────────────────────────────────
