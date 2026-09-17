@@ -6,6 +6,22 @@ const fs = require('fs')
 const WHACENTER_DEVICE_ID = '550fd04ee9fc7c4b4e057d0bce6270f3'
 const IMGBB_API_KEY = 'bb2f97ad9b31b5ae4967eeead61e03de'
 
+// ── Kirim binary image langsung ke Whacenter (tanpa upload ke image host) ──
+// group XOR nomor wajib. caption = pesan WA. filename = nama file attachment.
+// Return { status: true/false, message: '...' }
+async function sendWADirect({ buffer, filename, caption, group, nomor }) {
+  const blob = new Blob([buffer], { type: 'image/png' })
+  const form = new FormData()
+  form.append('device_id', WHACENTER_DEVICE_ID)
+  form.append('message', caption || '')
+  form.append('file', blob, filename || `img_${Date.now()}.png`)
+  let waEndpoint = ''
+  if (group)  { form.append('group',  group);  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
+  else        { form.append('number', nomor);  waEndpoint = 'https://app.whacenter.com/api/send' }
+  const res  = await fetch(waEndpoint, { method: 'POST', body: form })
+  return await res.json()
+}
+
 // ── Upload image buffer ke ImgBB (primary) dengan fallback ke litterbox
 // Mengembalikan URL string atau throw error
 async function uploadImageImgBB(buffer, filename) {
@@ -129,7 +145,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v15-imgbb-primary-fallback-litterbox-20260917'
+const DEPLOY_VERSION = 'v15-direct-binary-wa-20260917'
 const CF_ORIGIN = 'https://mesin-monitor.pages.dev'
 
 // ── Anti-duplikat internal Render ───────────────────────────────────────────
@@ -479,45 +495,20 @@ tr:last-child td{border-bottom:none;}
         if (nomor || group) {
           ;(async () => {
             let waResult = null
-            let imgUrl = ''
             try {
               const tglFmt = tgl.split('-').reverse().join('.')
               const caption = waMsg || `📊 *HOP BBM KALSELTENG — ${tglFmt}*\nData stok & estimasi BBM per ULD (data H-1)\n_AMC UID KASELTENG_`
-
-              try {
-                imgUrl = await uploadImage(shot, `HOP_BBM_${tgl}_${Date.now()}.png`)
-                console.log(`[UPLOAD-HOP] OK → ${imgUrl}`)
-              } catch(e) {
-                console.error(`[UPLOAD-HOP] FAIL: ${e.message}`)
-              }
-
-              if (imgUrl) {
-                const payload = {
-                  device_id: WHACENTER_DEVICE_ID,
-                  message: caption,
-                  file: imgUrl
-                }
-                let waEndpoint = ''
-                if (nomor) {
-                  payload.number = nomor
-                  waEndpoint = 'https://app.whacenter.com/api/send'
-                } else {
-                  payload.group = group
-                  waEndpoint = 'https://app.whacenter.com/api/sendGroup'
-                }
-                const waRes = await fetch(waEndpoint, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(payload)
-                })
-                waResult = await waRes.json()
-                console.log(`[WA] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
-              } else {
-                console.error(`[WA] Skip kirim — imgUrl kosong`)
-                waResult = { error: 'imgUrl kosong, upload gagal' }
-              }
+              // Kirim binary langsung ke Whacenter (tanpa upload ke image host)
+              waResult = await sendWADirect({
+                buffer: shot,
+                filename: `HOP_BBM_${tgl}.png`,
+                caption,
+                group: group || null,
+                nomor: nomor || null
+              })
+              console.log(`[WA-HOP] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
             } catch(e) {
-              console.error(`[WA] Error kirim: ${e.message}`)
+              console.error(`[WA-HOP] Error kirim: ${e.message}`)
               waResult = { error: e.message }
             }
 
@@ -528,8 +519,8 @@ tr:last-child td{border-bottom:none;}
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ tanggal: tgl, status: 'sent' })
                 })
-                console.log(`[CB] Callback OK → ${callbackUrl}`)
-              } catch(e) { console.error(`[CB] Callback error: ${e.message}`) }
+                console.log(`[CB-HOP] Callback OK → ${callbackUrl}`)
+              } catch(e) { console.error(`[CB-HOP] Callback error: ${e.message}`) }
             }
             hopProcessing.delete(tgl)  // selesai — boleh proses lagi jika retry
           })()
@@ -607,16 +598,23 @@ tr:last-child td{border-bottom:none;}
               try {
                 imgUrl = await uploadImage(shot, `NERACA_PBUN_${tgl}_${Date.now()}.png`)
                 console.log(`[UPLOAD-PBUN] OK → ${imgUrl}`)
-              } catch(e) { console.error(`[UPLOAD-PBUN] FAIL: ${e.message}`) }
+              } catch(e) { console.error(`[UPLOAD-PBUN] FAIL (akan pakai direct binary): ${e.message}`) }
 
-              if (imgUrl && (nomor || group)) {
+              if (nomor || group) {
                 const caption = waMsg || `⚡ *NERACA DAYA UP3 PBUN — ${tglFmt}*\nData beban puncak malam ULD UP3 Pangkalan Bun.\n_AMC UID KASELTENG_`
-                const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
-                let waEndpoint = ''
-                if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
-                else       { payload.group  = group;  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
-                const waRes = await fetch(waEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
-                const waResult = await waRes.json()
+                let waResult
+                if (imgUrl) {
+                  // Cara lama: via image URL
+                  const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
+                  let waEndpoint = ''
+                  if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
+                  else       { payload.group  = group;  waEndpoint = 'https://app.whacenter.com/api/sendGroup' }
+                  const waRes = await fetch(waEndpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+                  waResult = await waRes.json()
+                } else {
+                  // Fallback: kirim binary langsung (tanpa image host)
+                  waResult = await sendWADirect({ buffer: shot, filename: `NERACA_PBUN_${tgl}.png`, caption, group: group||null, nomor: nomor||null })
+                }
                 console.log(`[WA-PBUN] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
                 if (waResult?.status && callbackUrl) {
                   await fetch(callbackUrl, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ tanggal: tgl, status: 'sent' }) })
@@ -801,10 +799,11 @@ tr:last-child td{border-bottom:none;}
               try {
                 imgUrl = await uploadImage(shot, `NERACA_${tgl}_${Date.now()}.png`)
                 console.log(`[UPLOAD-NERACA] OK → ${imgUrl}`)
-              } catch(e) { console.error(`[UPLOAD-NERACA] FAIL: ${e.message}`) }
+              } catch(e) { console.error(`[UPLOAD-NERACA] FAIL (akan pakai direct binary): ${e.message}`) }
 
+              const caption = waMsg || `⚡ *NERACA DAYA KALSELTENG — ${tglFmt}*\nData beban puncak malam seluruh ULD\n_AMC UID KASELTENG_`
               if (imgUrl) {
-                const caption = waMsg || `⚡ *NERACA DAYA KALSELTENG — ${tglFmt}*\nData beban puncak malam seluruh ULD\n_AMC UID KASELTENG_`
+                // Cara lama: via image URL
                 const payload = { device_id: WHACENTER_DEVICE_ID, message: caption, file: imgUrl }
                 let waEndpoint = ''
                 if (nomor) { payload.number = nomor; waEndpoint = 'https://app.whacenter.com/api/send' }
@@ -817,8 +816,9 @@ tr:last-child td{border-bottom:none;}
                 waResult = await waRes.json()
                 console.log(`[WA-NERACA] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
               } else {
-                console.error(`[WA-NERACA] Skip — imgUrl kosong`)
-                waResult = { error: 'imgUrl kosong' }
+                // Fallback: kirim binary langsung ke Whacenter (bypass image host)
+                waResult = await sendWADirect({ buffer: shot, filename: `NERACA_${tgl}.png`, caption, group: group||null, nomor: nomor||null })
+                console.log(`[WA-NERACA-DIRECT] ${tgl} → ${waResult?.status ? 'OK' : 'FAIL'} ${JSON.stringify(waResult)}`)
               }
             } catch(e) {
               console.error(`[WA-NERACA] Error kirim: ${e.message}`)
