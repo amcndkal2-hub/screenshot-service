@@ -195,7 +195,7 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v17-multipart-form-uguu-20260917'
+const DEPLOY_VERSION = 'v18-render-endpoint-tabel-lengkap-20260917'
 const CF_ORIGIN = 'https://mesin-monitor.pages.dev'
 
 // ── Anti-duplikat internal Render ───────────────────────────────────────────
@@ -300,35 +300,27 @@ const server = http.createServer(async (req, res) => {
         const tgl = tanggal || new Date().toISOString().split('T')[0]
         const tglFmt = tgl.split('-').reverse().join('.')
 
-        // 1. Ambil data
-        const apiRes = await fetch(`${baseUrl}/api/neraca-daya?tanggal=${tgl}`)
-        const apiJson = await apiRes.json()
-        if (!apiJson.success || !apiJson.data?.length) {
+        // 1. Fetch HTML dari endpoint render neraca KALSELTENG
+        const htmlRes = await fetch(`${baseUrl}/api/neraca-kalselteng-render?tanggal=${tgl}`)
+        if (!htmlRes.ok) {
           res.writeHead(200, {'Content-Type':'application/json'})
-          res.end(JSON.stringify({ success: false, step: 'fetch-data', error: `Data kosong untuk ${tgl}` }))
+          res.end(JSON.stringify({ success: false, step: 'fetch-html', error: `HTTP ${htmlRes.status}` }))
           return
         }
-        const rows = apiJson.data
+        const html = await htmlRes.text()
+        const dataRows = html.includes('ULD') ? 1 : 0  // sanity check
 
-        // 2. Build HTML minimal
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,sans-serif;font-size:11px;}
-body{background:#f1f5f9;padding:10px;display:inline-block;}
-.wrap{background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.12);display:inline-block;padding:10px;}
-</style></head><body><div class="wrap">
-<h3 style="color:#1e3a5f">NERACA DAYA ${tglFmt} — ${rows.length} ULD</h3>
-<p style="color:#475569">Test screenshot sync</p>
-</div></body></html>`
-
-        // 3. Screenshot
+        // 2. Screenshot
         const br = await getBrowser()
-        const ctx = await br.newContext({ viewport:{ width:400, height:200 }, deviceScaleFactor:2 })
+        const ctx = await br.newContext({ viewport:{ width:100, height:100 }, deviceScaleFactor:2 })
         const page = await ctx.newPage()
-        await page.setContent(html, { waitUntil:'domcontentloaded' })
-        const el = await page.$('.wrap')
+        await page.setContent(html, { waitUntil:'networkidle' })
+        await page.waitForTimeout(300)
+        const el  = await page.$('.wrap')
+        const box = await el.boundingBox()
+        await page.setViewportSize({ width: Math.ceil(box.width+box.x*2), height: Math.ceil(box.height+box.y*2) })
         const shot = await el.screenshot({ type:'png' })
         await ctx.close()
-        const b64 = shot.toString('base64')
         const imgSize = shot.length
 
         // 4. Upload gambar ke litterbox.catbox.moe
@@ -355,7 +347,7 @@ body{background:#f1f5f9;padding:10px;display:inline-block;}
         res.end(JSON.stringify({
           success: true,
           step: 'done',
-          data_rows: rows.length,
+          data_rows: dataRows,
           screenshot_bytes: imgSize,
           upload: { success: uploadResult?.success, url: imgUrl, error: uploadResult?.error },
           wa: waResult,
@@ -533,7 +525,6 @@ tr:last-child td{border-bottom:none;}
 
         const { nomor, group, message: waMsg, callbackUrl } = JSON.parse(body || '{}')
 
-        const b64 = shot.toString('base64')
         res.writeHead(200, {'Content-Type':'application/json'})
         res.end(JSON.stringify({ success: true, queued: true }))
 
@@ -688,149 +679,27 @@ tr:last-child td{border-bottom:none;}
         neracaProcessing.add(tgl)
         console.log(`[screenshot-neraca] Mulai proses ${tgl}`)
 
-        const apiRes = await fetch(`${baseUrl}/api/neraca-daya?tanggal=${tgl}`)
-        const apiJson = await apiRes.json()
-        if (!apiJson.success || !apiJson.data?.length) {
+        // Fetch HTML dari endpoint render neraca KALSELTENG
+        const htmlRes = await fetch(`${baseUrl}/api/neraca-kalselteng-render?tanggal=${tgl}`)
+        if (!htmlRes.ok) {
           res.writeHead(200, {'Content-Type':'application/json'})
-          res.end(JSON.stringify({ success: false, error: `Data neraca kosong untuk tanggal ${tgl}` }))
+          res.end(JSON.stringify({ success: false, error: `Gagal fetch HTML neraca: ${htmlRes.status}` }))
+          neracaProcessing.delete(tgl)
           return
         }
-        const rows = apiJson.data
-
-        function fmtNum(val) {
-          if (val === null || val === undefined || val === 0) return '<span style="color:#94a3b8">—</span>'
-          return Number(val).toLocaleString('id-ID')
-        }
-        function fmtN0(val) {
-          if (val === null || val === undefined) return '—'
-          return Number(val).toLocaleString('id-ID')
-        }
-
-        let totMaks=0, totBpSiang=0, totCadSiang=0, totBpMalam=0, totCadMalam=0
-        let totOps=0, totStby=0, totPem=0, totGng=0, totRsk=0
-        rows.forEach(d => {
-          totMaks      += d.dm_terpasang||0
-          totBpSiang   += d.beban_puncak_siang||0
-          totCadSiang  += Math.max(0, (d.dm_pasok||0) - (d.beban_puncak_siang||0))
-          totBpMalam   += d.beban_puncak_malam||0
-          totCadMalam  += Math.max(0, (d.dm_pasok||0) - (d.beban_puncak_malam||0))
-          totOps  += d.jumlah_operasi||0
-          totStby += d.jumlah_standby||0
-          totPem  += d.jumlah_pemeliharaan||0
-          totGng  += d.jumlah_gangguan||0
-          totRsk  += d.jumlah_rusak||0
-        })
-
-        let rows_html = ''
-        rows.forEach((d, i) => {
-          const rowBg = i % 2 === 0 ? '#ffffff' : '#f8fafc'
-          const p = 'padding:5px 7px;'
-
-          const cadSiang = (d.dm_pasok||0) - (d.beban_puncak_siang||0)
-          const cadMalam = (d.dm_pasok||0) - (d.beban_puncak_malam||0)
-          const maxDm    = d.max_dm||0
-          const n1       = cadMalam - maxDm
-
-          let statusLabel, statusBg, statusFg
-          if (cadMalam < 0) {
-            statusLabel = 'KRITIS'; statusBg = '#fee2e2'; statusFg = '#991b1b'
-          } else if (cadMalam < maxDm) {
-            statusLabel = 'SIAGA';  statusBg = '#fef3c7'; statusFg = '#92400e'
-          } else {
-            statusLabel = 'NORMAL'; statusBg = '#d1fae5'; statusFg = '#065f46'
-          }
-
-          rows_html += `<tr style="background:${rowBg};">
-            <td style="${p}text-align:center;">${i+1}</td>
-            <td style="${p}font-weight:600;white-space:nowrap;">${d.nama_unit}</td>
-            <td style="${p}text-align:right;">${fmtN0(d.dm_terpasang)}</td>
-            <td style="${p}text-align:right;">${fmtNum(d.beban_puncak_siang)}</td>
-            <td style="${p}text-align:right;">${fmtN0(cadSiang)}</td>
-            <td style="${p}text-align:right;font-weight:600;">${fmtNum(d.beban_puncak_malam)}</td>
-            <td style="${p}text-align:right;">${fmtN0(cadMalam < 0 ? 0 : cadMalam)}</td>
-            <td style="${p}text-align:right;font-weight:600;">${n1}</td>
-            <td style="${p}text-align:center;">${d.jumlah_operasi||0}</td>
-            <td style="${p}text-align:center;">${d.jumlah_standby||0}</td>
-            <td style="${p}text-align:center;">${d.jumlah_pemeliharaan||0}</td>
-            <td style="${p}text-align:center;">${d.jumlah_gangguan||0}</td>
-            <td style="${p}text-align:center;">${d.jumlah_rusak||0}</td>
-            <td style="${p}text-align:center;font-weight:700;background:${statusBg};color:${statusFg};">${statusLabel}</td>
-          </tr>`
-        })
-
-        const totN1 = totCadMalam - (rows.reduce((s,d)=>s+(d.max_dm||0),0))
-        rows_html += `<tr style="background:#1e3a5f;color:#fff;font-weight:700;">
-          <td colspan="2" style="padding:5px 7px;text-align:center;">TOTAL</td>
-          <td style="padding:5px 7px;text-align:right;">${totMaks.toLocaleString('id-ID')}</td>
-          <td style="padding:5px 7px;text-align:right;">${totBpSiang.toLocaleString('id-ID')}</td>
-          <td style="padding:5px 7px;text-align:right;">${totCadSiang.toLocaleString('id-ID')}</td>
-          <td style="padding:5px 7px;text-align:right;">${totBpMalam.toLocaleString('id-ID')}</td>
-          <td style="padding:5px 7px;text-align:right;">${totCadMalam.toLocaleString('id-ID')}</td>
-          <td style="padding:5px 7px;text-align:right;">${totN1.toLocaleString('id-ID')}</td>
-          <td style="padding:5px 7px;text-align:center;">${totOps}</td>
-          <td style="padding:5px 7px;text-align:center;">${totStby}</td>
-          <td style="padding:5px 7px;text-align:center;">${totPem}</td>
-          <td style="padding:5px 7px;text-align:center;">${totGng}</td>
-          <td style="padding:5px 7px;text-align:center;">${totRsk}</td>
-          <td style="padding:5px 7px;"></td>
-        </tr>`
-
-        const th = 'background:#1e3a5f;color:#fff;padding:6px 7px;text-align:center;white-space:nowrap;border-right:1px solid #4a7ab5;'
-        const now = new Date()
-        const tsStr = now.toLocaleString('id-ID', { timeZone:'Asia/Jakarta', hour12:false }).replace(',','')
-
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>
-*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,sans-serif;font-size:11px;}
-body{background:#f1f5f9;padding:10px;display:inline-block;}
-.wrap{background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.12);display:inline-block;}
-.title{background:#1e3a5f;color:#fff;padding:8px 12px;font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center;}
-.title-ts{font-size:9px;color:#94a3b8;font-weight:400;margin-left:16px;white-space:nowrap;}
-.sub{background:#1e3a5f;color:#94a3b8;padding:1px 12px 7px;font-size:10px;}
-table{border-collapse:collapse;width:auto;}
-td{border-right:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;}
-td:last-child{border-right:none;}
-tr:last-child td{border-bottom:none;}
-</style></head><body>
-<div class="wrap">
-  <div class="title">
-    <span>⚡ NERACA DAYA KALSELTENG — ${tglFmt}</span>
-    <span class="title-ts">dibuat: ${tsStr} WIB</span>
-  </div>
-  <div class="sub">Data beban puncak malam seluruh ULD · AMC UID KASELTENG</div>
-  <table>
-    <thead><tr>
-      <th style="${th}">NO</th>
-      <th style="${th}text-align:left;">ULD</th>
-      <th style="${th}">MAKS</th>
-      <th style="${th}">BP<br>SIANG</th>
-      <th style="${th}">CAD<br>SIANG</th>
-      <th style="${th}">BP<br>MALAM</th>
-      <th style="${th}">CAD<br>MALAM</th>
-      <th style="${th}">N-1</th>
-      <th style="${th}">OPS</th>
-      <th style="${th}">STBY</th>
-      <th style="${th}">PEM</th>
-      <th style="${th}">GNG</th>
-      <th style="${th}">RSK</th>
-      <th style="${th}border-right:none;">STATUS</th>
-    </tr></thead>
-    <tbody>${rows_html}</tbody>
-  </table>
-</div></body></html>`
+        const html = await htmlRes.text()
 
         const br = await getBrowser()
         const ctx = await br.newContext({ viewport:{ width:100, height:100 }, deviceScaleFactor:2 })
         const page = await ctx.newPage()
         await page.setContent(html, { waitUntil:'networkidle' })
-        await page.waitForTimeout(200)
+        await page.waitForTimeout(300)
         const el  = await page.$('.wrap')
         const box = await el.boundingBox()
         await page.setViewportSize({ width: Math.ceil(box.width+box.x*2), height: Math.ceil(box.height+box.y*2) })
         const shot = await el.screenshot({ type:'png' })
         await ctx.close()
 
-        const b64 = shot.toString('base64')
         const { nomor, group, message: waMsg, callbackUrl } = JSON.parse(body || '{}')
 
         res.writeHead(200, {'Content-Type':'application/json'})
