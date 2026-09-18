@@ -3,8 +3,25 @@ const { chromium } = require('playwright')
 const path = require('path')
 const fs = require('fs')
 
-const WHACENTER_DEVICE_ID = '550fd04ee9fc7c4b4e057d0bce6270f3'
+const WHACENTER_DEVICE_ID = '550fd04ee9fc7c4b4e057d0bce6270f3'  // fallback — akan ditimpa oleh kvGet
 const IMGBB_API_KEY = 'bb2f97ad9b31b5ae4967eeead61e03de'
+const CF_ORIGIN = 'https://mesin-monitor.pages.dev'
+
+// ── Ambil device_id aktif dari CF Pages kv_store ──────────────────────────────
+// Selalu fetch fresh saat dipanggil agar reflect update tanpa redeploy Render
+async function fetchDeviceId() {
+  try {
+    const res = await fetch(`${CF_ORIGIN}/api/whacenter-device`, { signal: AbortSignal.timeout(5000) })
+    const json = await res.json()
+    if (json.device_id && json.device_id.length > 10) {
+      console.log(`[device_id] Dari CF: ${json.device_id} (source: ${json.source})`)
+      return json.device_id
+    }
+  } catch(e) {
+    console.warn(`[device_id] Gagal fetch dari CF: ${e.message}, pakai fallback`)
+  }
+  return WHACENTER_DEVICE_ID
+}
 
 // ── Upload ke uguu.se (gratis, direct URL image/png, aktif 48 jam) ──
 async function uploadImageUguu(buffer, filename) {
@@ -112,18 +129,24 @@ async function uploadImage(buffer, filename) {
 // ── Helper: kirim gambar ke Whacenter via multipart form-data ──
 // Sesuai dokumentasi resmi: field 'file' berisi URL gambar, kirim sebagai multipart
 async function sendWAImage(target, isGroup, imgUrl, caption) {
+  const deviceId = await fetchDeviceId()  // selalu baca dari CF kv_store
   const form = new FormData()
-  form.append('device_id', WHACENTER_DEVICE_ID)
+  form.append('device_id', deviceId)
   form.append('message', caption)
   form.append('file', imgUrl)
+  console.log(`[WA] device_id=${deviceId} target=${target} isGroup=${isGroup} imgUrl=${imgUrl}`)
   if (isGroup) {
     form.append('group', target)
     const r = await fetch('https://app.whacenter.com/api/sendGroup', { method: 'POST', body: form })
-    return r.json()
+    const json = await r.json()
+    console.log(`[WA] sendGroup response:`, JSON.stringify(json))
+    return json
   } else {
     form.append('number', target)
     const r = await fetch('https://app.whacenter.com/api/send', { method: 'POST', body: form })
-    return r.json()
+    const json = await r.json()
+    console.log(`[WA] send response:`, JSON.stringify(json))
+    return json
   }
 }
 
@@ -195,8 +218,8 @@ async function getBrowser() {
   return browser
 }
 
-const DEPLOY_VERSION = 'v18-render-endpoint-tabel-lengkap-20260917'
-const CF_ORIGIN = 'https://mesin-monitor.pages.dev'
+const DEPLOY_VERSION = 'v19-device-id-from-kv-20260918'
+// CF_ORIGIN sudah didefinisikan di atas
 
 // ── Anti-duplikat internal Render ───────────────────────────────────────────
 // Set tanggal yang sedang diproses agar request ganda (dari CF cron setiap menit)
