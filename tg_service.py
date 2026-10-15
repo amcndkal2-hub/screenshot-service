@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Telegram MTProto sender service
-POST /send  { "teks": "..." }  → kirim ke @WacbBot via akun user 085388709607
-GET  /      → health check { "status": "ok" }
+POST /send  { "teks": "..." }  -> kirim ke @WacbBot via akun user 085388709607
+GET  /      -> health check { "status": "ok" }
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json, asyncio, threading, os
@@ -16,27 +16,32 @@ SESSION_STR = '1BVtsOI0Bu5u6f3WYldwkCjJdjsL18QI5_mm8233Z3OOTn46bjtqkTjfQl7NlULWw
 TARGET      = 'WacbBot'
 PORT        = int(os.environ.get('PORT', 4445))
 
-# ── Event loop & persistent client ──────────────────────────────
-loop   = asyncio.new_event_loop()
-client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH, loop=loop)
-
-async def _start():
-    await client.connect()
-    print('Telethon connected', flush=True)
+# ── Buat event loop eksplisit di thread terpisah (kompatibel Python 3.10+) ──
+loop = asyncio.new_event_loop()
 
 def run_loop():
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(_start())
     loop.run_forever()
 
-threading.Thread(target=run_loop, daemon=True).start()
+loop_thread = threading.Thread(target=run_loop, daemon=True)
+loop_thread.start()
 
-# Tunggu client connect sebelum terima request
-import time
-time.sleep(3)
+# ── Buat client di dalam loop thread ────────────────────────────
+async def _init_client():
+    global client
+    client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
+    await client.connect()
+    print('Telethon connected', flush=True)
+
+client = None
+future = asyncio.run_coroutine_threadsafe(_init_client(), loop)
+try:
+    future.result(timeout=30)
+except Exception as e:
+    print(f'Telethon init error: {e}', flush=True)
 
 # ── Send helper ──────────────────────────────────────────────────
-async def send_message(teks):
+async def _send(teks):
     if not client.is_connected():
         await client.connect()
     await client.send_message(TARGET, teks)
@@ -44,9 +49,9 @@ async def send_message(teks):
 # ── HTTP Handler ─────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        pass  # suppress default logs
+        pass
 
-    def _json(self, code, body: dict):
+    def _json(self, code, body):
         data = json.dumps(body).encode()
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
@@ -66,13 +71,12 @@ class Handler(BaseHTTPRequestHandler):
             if not teks:
                 self._json(400, {'success': False, 'error': 'teks kosong'})
                 return
-            future = asyncio.run_coroutine_threadsafe(send_message(teks), loop)
-            future.result(timeout=30)
+            fut = asyncio.run_coroutine_threadsafe(_send(teks), loop)
+            fut.result(timeout=30)
             self._json(200, {'success': True})
         except Exception as e:
             self._json(500, {'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
     print(f'Telegram MTProto service running on 0.0.0.0:{PORT}', flush=True)
-    server = HTTPServer(('0.0.0.0', PORT), Handler)
-    server.serve_forever()
+    HTTPServer(('0.0.0.0', PORT), Handler).serve_forever()
