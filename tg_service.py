@@ -59,8 +59,16 @@ async def _send_code(phone):
     result = await client.send_code_request(phone)
     return result.phone_code_hash
 
-async def _sign_in(phone, code, hash_):
-    await client.sign_in(phone=phone, code=code, phone_code_hash=hash_)
+async def _sign_in(phone, code, hash_, password=None):
+    try:
+        await client.sign_in(phone=phone, code=code, phone_code_hash=hash_)
+    except Exception as e:
+        if 'SessionPasswordNeeded' in type(e).__name__:
+            if not password:
+                raise Exception('2FA_REQUIRED')
+            await client.sign_in(password=password)
+        else:
+            raise
     return client.session.save()
 
 # ── HTTP Handler ─────────────────────────────────────────────────
@@ -109,10 +117,11 @@ class Handler(BaseHTTPRequestHandler):
                 phone = data.get('phone', '+6285388709607')
                 code  = str(data.get('code', ''))
                 hash_ = data.get('phone_hash') or phone_code_hash.get(phone, '')
+                password = data.get('password', None)
                 if not code or not hash_:
                     self._json(400, {'success': False, 'error': 'code dan phone_hash wajib'})
                     return
-                new_session = asyncio.run_coroutine_threadsafe(_sign_in(phone, code, hash_), loop).result(timeout=30)
+                new_session = asyncio.run_coroutine_threadsafe(_sign_in(phone, code, hash_, password), loop).result(timeout=30)
                 self._json(200, {'success': True, 'session': new_session})
 
             else:
