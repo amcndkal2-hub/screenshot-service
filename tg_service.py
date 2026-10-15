@@ -14,7 +14,7 @@ from telethon.sessions import StringSession
 
 API_ID      = 31670714
 API_HASH    = '94cec71e7719a641c36d9aad0903c92d'
-SESSION_STR = os.environ.get('TG_SESSION', '1BVtsOI0Bu5u6f3WYldwkCjJdjsL18QI5_mm8233Z3OOTn46bjtqkTjfQl7NlULWwFk7_KZEO9PToAU1-HovxNh2Mo7kKpZAHJs1ZbXTdVw9xaxPpBJ95_-Ei9WdHGNn2pwx6poVhD1CwS4tKVlXpDYl5x8D84CQu2zvS21tbOlgdjpQmhTIM35_UJLKzDCEg33Mu_QAZODCeRulEWcKBcJmZcgYw8p0vjvBrrBX2TedX5q6zRrWiz-fqUjFBwBh5zfV6mmb9t1khY__CpJ8SF38sReLzWubUYkrcbWcvEqqhGJ5UF9K1SzRHVfd1O2rqQt2wcyN2UUczbu0V8aBqxUUIJETjNqQ=')
+SESSION_STR = os.environ.get('TG_SESSION', '')  # kosong = login baru via /auth/send-code
 TARGET      = 'WacbBot'
 PORT        = int(os.environ.get('PORT', 4445))
 
